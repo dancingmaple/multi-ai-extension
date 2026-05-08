@@ -1,2 +1,3 @@
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(console.error);
-console.log('Background service worker loaded');
+import { initMessageRouter } from './messageRouter';
+
+initMessageRouter().catch(console.error);
