@@ -1,0 +1,31 @@
+import type { ProviderName } from './types';
+
+export const PROVIDER_URLS: Record<ProviderName, string> = {
+  chatgpt: 'https://chatgpt.com/',
+  gemini: 'https://gemini.google.com/',
+  deepseek: 'https://chat.deepseek.com/',
+};
+
+export const PROVIDER_LABELS: Record<ProviderName, string> = {
+  chatgpt: 'ChatGPT',
+  gemini: 'Gemini',
+  deepseek: 'DeepSeek',
+};
+
+export const ALL_PROVIDERS: ProviderName[] = ['chatgpt', 'gemini', 'deepseek'];
+
+export const STREAM_THROTTLE_MS = 300;
+export const DONE_STABLE_MS = 250;
+export const TAB_SETTLE_MS = 3000;
+export const ELEMENT_TIMEOUT_MS = 15000;
+export const PING_RETRY_MAX = 5;
+export const PING_RETRY_DELAY_MS = 1000;
+
+export const ERROR_CODES = {
+  ELEMENT_NOT_FOUND: 'ELEMENT_NOT_FOUND',
+  LOGIN_REQUIRED: 'LOGIN_REQUIRED',
+  SUBMIT_FAILED: 'SUBMIT_FAILED',
+  STREAM_FAILED: 'STREAM_FAILED',
+  TIMEOUT: 'TIMEOUT',
+  UNKNOWN: 'UNKNOWN',
+} as const;
