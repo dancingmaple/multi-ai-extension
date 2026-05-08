@@ -14,6 +14,13 @@ const App: React.FC = () => {
     const listener = (msg: BackgroundToUIMessage) => {
       if (msg.type === 'TASK_STATE_UPDATE') {
         setTask(msg.task);
+        // Clear loading when all providers have finished
+        const allDone = Object.values(msg.task.providers).every(
+          (p) => p.status === 'done' || p.status === 'error' || p.status === 'login_required'
+        );
+        if (allDone) {
+          useStore.setState({ isLoading: false });
+        }
       }
     };
 
