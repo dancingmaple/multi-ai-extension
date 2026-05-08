@@ -1,0 +1,843 @@
+
+
+# 一、项目目标
+
+开发一个浏览器插件，实现以下能力：
+
+1. 用户在插件侧边栏输入一次问题
+2. 插件将问题**并发发送**到多个已打开或自动打开的 AI 网页：
+   - ChatGPT
+   - Gemini
+   - DeepSeek
+3. 插件通过网页自动化：
+   - 找到输入框
+   - 填入 prompt
+   - 点击发送
+   - 监听页面回答流式更新
+4. 插件统一收集多个 AI 的回答
+5. 用户可在插件侧边栏中通过 **tab** 查看每个 AI 的回答
+6. 支持基础状态展示：
+   - waiting
+   - sending
+   - streaming
+   - done
+   - error
+7. 首个版本只做 **单轮问答**，暂不要求多轮上下文同步
+
+---
+
+# 二、实现边界
+
+## 这版要做
+- Chrome/Edge 浏览器插件
+- Manifest V3
+- Side Panel 作为主 UI
+- 支持 3 个站点：
+  - `chatgpt.com`
+  - `gemini.google.com`
+  - `chat.deepseek.com` 或当前可访问 DeepSeek 官方聊天网页
+- 并发发送 prompt
+- 流式采集回答文本
+- 在插件中切换 tab 查看结果
+- 自动打开目标页面
+- 检测未登录/页面不可用状态
+- 基础错误提示
+- 本地保存最近一次任务状态
+
+## 这版不做
+- 多轮会话历史同步
+- 富文本/代码块高保真解析
+- 图片上传
+- 文件上传
+- 复杂反爬绕过
+- 云端同步
+- 账号管理
+- 官方 API 集成
+
+---
+
+# 三、总体架构
+
+采用 **插件分层架构**：
+
+```text
+Side Panel UI
+   ↓
+Background Service Worker（任务调度中心）
+   ↓
+Content Script（注入各 AI 网页）
+   ↓
+Site Adapter（站点自动化逻辑）
+```
+
+---
+
+# 四、模块职责
+
+## 1. Side Panel UI
+职责：
+- 输入 prompt
+- 选择目标平台
+- 发起任务
+- 实时展示每个平台状态
+- tab 切换不同 AI 的回答
+- 展示错误信息
+- 提供“重试”按钮
+
+建议技术：
+- React + TypeScript + Vite
+- Zustand 做状态管理
+- Tailwind 可选
+
+---
+
+## 2. Background Service Worker
+职责：
+- 接收 UI 发来的“群发任务”
+- 检查目标站点标签页是否存在
+- 不存在则创建
+- 确保 content script 就绪
+- 向各站点分发任务
+- 汇总各站点流式消息
+- 将结果广播给 side panel
+
+它是整个系统的**总调度器**。
+
+---
+
+## 3. Content Script
+职责：
+- 在目标网页中执行自动化动作
+- 调用对应站点适配器
+- 向 background 回传：
+  - 状态变化
+  - 流式文本
+  - 完成事件
+  - 错误事件
+
+---
+
+## 4. Site Adapter
+每个站点一个适配器，封装网页自动化细节。
+
+接口统一为：
+
+- `isReady()`
+- `findInput()`
+- `setPrompt()`
+- `submit()`
+- `startStreamCapture()`
+- `detectDone()`
+- `detectLoginRequired()`
+
+支持站点：
+- `chatgpt`
+- `gemini`
+- `deepseek`
+
+---
+
+# 五、核心流程
+
+## 用户发起任务流程
+
+```text
+1. 用户在 Side Panel 输入 prompt
+2. UI -> Background: ASK_ALL
+3. Background 为每个平台：
+   a. 查找已有 tab
+   b. 若无则创建 tab
+   c. 等待页面完成加载
+   d. 向目标 tab 发送 EXECUTE_PROMPT
+4. Content Script 收到消息后调用对应 adapter
+5. Adapter:
+   a. 检测页面是否可用/是否登录
+   b. 找输入框
+   c. 写入 prompt
+   d. 点击发送
+   e. 监听回答区域 DOM 变化
+6. Content Script 持续发送 STREAM_UPDATE 给 Background
+7. Background 转发给 Side Panel
+8. Side Panel 更新对应 tab 内容
+9. 当 adapter 判断完成后，发送 TASK_DONE
+10. UI 状态更新为 done
+```
+
+---
+
+# 六、通信协议
+
+为了方便 coding agent 实现，统一消息格式。
+
+## UI -> Background
+
+### 1. 发起群发任务
+```ts
+type AskAllMessage = {
+  type: 'ASK_ALL';
+  taskId: string;
+  prompt: string;
+  targets: ProviderName[];
+};
+```
+
+### 2. 获取当前任务状态
+```ts
+type GetTaskStateMessage = {
+  type: 'GET_TASK_STATE';
+  taskId: string;
+};
+```
+
+### 3. 重试单个平台
+```ts
+type RetryProviderMessage = {
+  type: 'RETRY_PROVIDER';
+  taskId: string;
+  provider: ProviderName;
+};
+```
+
+---
+
+## Background -> Content Script
+
+### 1. 执行 prompt
+```ts
+type ExecutePromptMessage = {
+  type: 'EXECUTE_PROMPT';
+  taskId: string;
+  provider: ProviderName;
+  prompt: string;
+};
+```
+
+### 2. 健康检查
+```ts
+type PingMessage = {
+  type: 'PING';
+};
+```
+
+---
+
+## Content Script -> Background
+
+### 1. 状态更新
+```ts
+type ProviderStatusMessage = {
+  type: 'PROVIDER_STATUS';
+  taskId: string;
+  provider: ProviderName;
+  status: 'waiting' | 'sending' | 'streaming' | 'done' | 'error' | 'login_required';
+  detail?: string;
+};
+```
+
+### 2. 流式更新
+```ts
+type StreamUpdateMessage = {
+  type: 'STREAM_UPDATE';
+  taskId: string;
+  provider: ProviderName;
+  content: string;
+  isPartial: true;
+};
+```
+
+### 3. 完成
+```ts
+type TaskDoneMessage = {
+  type: 'TASK_DONE';
+  taskId: string;
+  provider: ProviderName;
+  finalContent: string;
+};
+```
+
+### 4. 错误
+```ts
+type TaskErrorMessage = {
+  type: 'TASK_ERROR';
+  taskId: string;
+  provider: ProviderName;
+  errorCode: string;
+  errorMessage: string;
+};
+```
+
+---
+
+# 七、统一数据模型
+
+```ts
+type ProviderName = 'chatgpt' | 'gemini' | 'deepseek';
+
+type ProviderTaskState = {
+  provider: ProviderName;
+  tabId?: number;
+  status: 'idle' | 'waiting' | 'sending' | 'streaming' | 'done' | 'error' | 'login_required';
+  content: string;
+  error?: string;
+  updatedAt: number;
+};
+
+type AskTaskState = {
+  taskId: string;
+  prompt: string;
+  createdAt: number;
+  providers: Record<ProviderName, ProviderTaskState>;
+};
+```
+
+---
+
+# 八、推荐目录结构
+
+这是建议 coding agent 直接生成的项目结构。
+
+```text
+multi-ai-extension/
+├─ public/
+│  ├─ icon-16.png
+│  ├─ icon-48.png
+│  └─ icon-128.png
+├─ src/
+│  ├─ background/
+│  │  ├─ index.ts
+│  │  ├─ taskManager.ts
+│  │  ├─ tabManager.ts
+│  │  ├─ messageRouter.ts
+│  │  └─ stateStore.ts
+│  ├─ content/
+│  │  ├─ index.ts
+│  │  ├─ executor.ts
+│  │  ├─ dom/
+│  │  │  ├─ common.ts
+│  │  │  ├─ observer.ts
+│  │  │  └─ events.ts
+│  │  └─ adapters/
+│  │     ├─ base.ts
+│  │     ├─ chatgpt.ts
+│  │     ├─ gemini.ts
+│  │     └─ deepseek.ts
+│  ├─ sidepanel/
+│  │  ├─ main.tsx
+│  │  ├─ App.tsx
+│  │  ├─ store.ts
+│  │  ├─ components/
+│  │  │  ├─ PromptInput.tsx
+│  │  │  ├─ ProviderTabs.tsx
+│  │  │  ├─ ProviderCard.tsx
+│  │  │  ├─ StatusBadge.tsx
+│  │  │  └─ Toolbar.tsx
+│  ├─ shared/
+│  │  ├─ types.ts
+│  │  ├─ constants.ts
+│  │  ├─ messaging.ts
+│  │  ├─ providers.ts
+│  │  └─ utils.ts
+│  └─ manifest.ts
+├─ package.json
+├─ tsconfig.json
+├─ vite.config.ts
+└─ README.md
+```
+
+---
+
+# 九、Manifest V3 设计
+
+## manifest 关键项
+
+```json
+{
+  "manifest_version": 3,
+  "name": "Multi AI Web Automation",
+  "version": ".1.",
+  "description": "Send one prompt to multiple AI web apps and view answers in one side panel",
+  "permissions": [
+    "tabs",
+    "storage",
+    "scripting",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://gemini.google.com/*",
+    "https://chat.deepseek.com/*",
+    "https://*.deepseek.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://gemini.google.com/*",
+        "https://chat.deepseek.com/*",
+        "https://*.deepseek.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Open Multi AI Panel"
+  }
+}
+```
+
+---
+
+# 十、站点适配器设计
+
+这是整个方案的关键。
+
+---
+
+## 1. 统一接口
+
+```ts
+export interface SiteAdapter {
+  provider: ProviderName;
+  match(): boolean;
+  isReady(): Promise<boolean>;
+  detectLoginRequired(): boolean;
+  waitForReady(timeoutMs?: number): Promise<void>;
+  setPrompt(prompt: string): Promise<void>;
+  submit(): Promise<void>;
+  startStreaming(
+    onUpdate: (text: string) => void,
+    onDone: (finalText: string) => void,
+    onError: (err: Error) => void
+  ): () => void;
+}
+```
+
+返回的 `() => void` 是取消监听函数。
+
+---
+
+## 2. BaseAdapter 公共能力
+
+抽象公共逻辑：
+
+- `waitForElement(selectors, timeout)`
+- `setNativeValue(element, value)`
+- `clickElement(element)`
+- `observeMutations(target, callback)`
+- `debounce/throttle stream update`
+- `extractText(node)`
+- `sleep(ms)`
+
+---
+
+## 3. ChatGPT 适配器
+
+## 目标站点
+- `https://chatgpt.com/`
+
+## 需要实现的能力
+- 定位输入框
+- 写入 prompt
+- 提交
+- 定位最新回答节点
+- 监听生成中内容变化
+- 检测完成
+
+## 候选策略
+### 输入框候选
+- `textarea`
+- `[contenteditable="true"]`
+
+### 发送按钮候选
+- `button[data-testid="send-button"]`
+- 带发送语义的按钮备用匹配
+
+### 回答区域候选
+- 主消息列表中的最后一个 assistant 消息
+- markdown 渲染节点
+- article/message 容器的最后一个回答块
+
+### 完成判断
+组合判断：
+- “停止生成”按钮消失
+- 回答区域在 150ms 内无变更
+- 出现“重新生成”类按钮（如存在）
+
+---
+
+## 4. Gemini 适配器
+
+## 目标站点
+- `https://gemini.google.com/`
+
+## 注意
+Gemini 页面结构经常变化，要多做兜底选择器。
+
+### 输入框候选
+- `textarea`
+- `div[contenteditable="true"]`
+- 带 prompt placeholder 的可编辑区域
+
+### 提交按钮候选
+- `button[aria-label*="发送"]`
+- `button[aria-label*="Send"]`
+
+### 回答区域
+- 最后一个模型回答容器
+- markdown / rich-text 区域
+
+### 完成判断
+- DOM 停止更新 + 页面生成按钮状态变化
+
+---
+
+## 5. DeepSeek 适配器
+
+## 目标站点
+- `https://chat.deepseek.com/` 或实际站点域名
+
+### 输入框候选
+- `textarea`
+- `div[contenteditable="true"]`
+
+### 发送按钮候选
+- 包含发送图标的 button
+- aria-label 匹配发送
+
+### 回答区域
+- 最后一个 assistant 消息容器
+
+### 完成判断
+- DOM 停更 + 停止按钮消失
+
+---
+
+# 十一、自动化实现细节
+
+## 1. 输入文本的方法
+
+很多网页是 React 控件，不能只写：
+
+```ts
+element.value = prompt;
+```
+
+必须用原生 setter + 事件派发。
+
+```ts
+export function setNativeInputValue(
+  element: HTMLTextAreaElement | HTMLInputElement,
+  value: string
+) {
+  const prototype = Object.getPrototypeOf(element);
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+  descriptor?.set?.call(element, value);
+  element.dispatchEvent(new Event('input', { bubbles: true }));
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+}
+```
+
+如果是 contenteditable，则需要：
+
+```ts
+export function setContentEditableValue(element: HTMLElement, value: string) {
+  element.focus();
+  document.execCommand('selectAll', false);
+  document.execCommand('insertText', false, value);
+  element.dispatchEvent(new InputEvent('input', { bubbles: true, data: value }));
+}
+```
+
+如 `execCommand` 不稳定，则降级：
+- `textContent = value`
+- 手动触发 input
+
+---
+
+## 2. 等待元素出现
+
+```ts
+export async function waitForElement(
+  selectors: string[],
+  timeoutMs = 15000
+): Promise<HTMLElement> { ... }
+```
+
+实现方式：
+- 先同步 query
+- 不存在则用 `MutationObserver`
+- 超时抛错
+
+---
+
+## 3. 回答流式监听
+
+对回答容器使用 `MutationObserver`。
+
+实现要求：
+- 每 300ms 节流一次上报
+- 只上报最新完整文本
+- 去除重复连续内容
+- 监听结束后 disconnect
+
+---
+
+## 4. 完成判断策略
+
+建议 coding agent 实现一个通用 `DoneDetector`，按以下优先级判断：
+
+### 信号 A：页面停止变化
+- 回答容器文本在 150ms 内无变化
+
+### 信号 B：停止按钮状态变化
+- 如果“停止生成”按钮消失，则判定结束
+
+### 信号 C：生成相关 DOM class 状态切换
+- 若站点有明显状态 class，则作为补充
+
+最终规则：
+- 满足 A 且 B，或 A 单独持续 250ms，则视为完成
+
+---
+
+## 5. 未登录检测
+
+每个 adapter 提供 `detectLoginRequired()`，检查：
+- 登录按钮出现
+- 页面被重定向到登录页
+- 输入框不存在且有登录提示文案
+
+状态统一上报为：
+- `login_required`
+
+---
+
+# 十二、Background 调度设计
+
+## 1. tabManager
+
+职责：
+- 查询是否已有目标站点 tab
+- 若无则创建
+- 若存在则返回最近一个
+- 可选是否激活 tab，默认不激活
+
+接口建议：
+
+```ts
+async function getOrCreateProviderTab(provider: ProviderName): Promise<number>
+```
+
+规则：
+- 匹配目标域名
+- 找不到就创建新 tab
+- 等待 `status=complete`
+- 额外等待 2~4 秒让 SPA 渲染稳定
+
+---
+
+## 2. taskManager
+
+职责：
+- 创建任务
+- 追踪各 provider 状态
+- 接收流式更新
+- 存入内存 + chrome.storage.local
+
+接口建议：
+
+```ts
+createTask(prompt: string, targets: ProviderName[]): AskTaskState
+updateProviderStatus(...)
+updateProviderContent(...)
+finishProviderTask(...)
+failProviderTask(...)
+getTask(taskId: string)
+```
+
+---
+
+## 3. messageRouter
+
+职责：
+- 统一处理来自 UI、content script 的消息
+- 做消息校验
+- 转发事件
+
+---
+
+# 十三、Side Panel UI 设计
+
+建议界面结构：
+
+```text
+┌─────────────────────────────┐
+│ Prompt 输入框                │
+│ [ChatGPT] [Gemini] [DeepSeek] 复选框 │
+│ [发送] [清空]               │
+├─────────────────────────────┤
+│ 状态条：chatgpt streaming... │
+├─────────────────────────────┤
+│ Tabs: ChatGPT | Gemini | DeepSeek │
+├─────────────────────────────┤
+│ 当前 tab 的回答内容区         │
+│ 支持自动滚动                 │
+│ 支持复制                     │
+├─────────────────────────────┤
+│ 错误信息 / 重试按钮           │
+└─────────────────────────────┘
+```
+
+## UI 状态管理字段
+
+```ts
+type PanelState = {
+  currentTaskId?: string;
+  prompt: string;
+  selectedProviders: ProviderName[];
+  activeTab: ProviderName;
+  task?: AskTaskState;
+};
+```
+
+---
+
+# 十四、Coding Agent 任务拆解
+
+下面这部分可以直接给 coding agent。
+
+---
+
+## Phase 1：搭建基础工程
+
+### 任务
+1. 使用 Vite + React + TypeScript 初始化 Chrome Extension MV3 项目
+2. 生成：
+   - background service worker
+   - side panel 页面
+   - content script
+3. 配置 manifest
+4. 建立 shared types
+5. 建立本地开发和打包脚本
+
+### 验收
+- 插件可被 Chrome 成功加载
+- 点击插件图标可打开 side panel
+- side panel 有基本 UI
+- content script 能注入目标站点
+- background 可接收消息
+
+---
+
+## Phase 2：实现消息总线和任务状态
+
+### 任务
+1. 实现 `shared/types.ts`
+2. 实现 `background/messageRouter.ts`
+3. 实现 `background/stateStore.ts`
+4. 实现 side panel 与 background 通信
+5. 完成任务状态更新和 UI 展示
+
+### 验收
+- 在 side panel 点击“发送”后，可生成 taskId
+- background 能创建任务状态
+- UI 能展示每个平台的 waiting 状态
+
+---
+
+## Phase 3：实现 tab 管理
+
+### 任务
+1. 实现 provider -> URL 映射
+2. 实现 `getOrCreateProviderTab(provider)`
+3. 支持自动打开 3 个目标站点
+4. 等待页面加载完成后发送 PING
+5. 如 content script 未就绪则重试
+
+### 验收
+- 发送任务时自动创建/复用对应站点标签页
+- 可拿到 tabId
+- 每个平台进入 sending 前状态
+
+---
+
+## Phase 4：实现 BaseAdapter 和 DOM 工具
+
+### 任务
+1. 实现 `waitForElement`
+2. 实现 `setNativeInputValue`
+3. 实现 `setContentEditableValue`
+4. 实现 `observeTextChanges`
+5. 实现 `waitForStableText`
+6. 实现公共错误类：
+   - ElementNotFoundError
+   - LoginRequiredError
+   - SubmitFailedError
+
+### 验收
+- 在测试页面中可正确设置文本并监听内容变化
+
+---
+
+## Phase 5：实现 DeepSeek 适配器
+
+### 任务
+1. 实现 `deepseek.ts`
+2. 找输入框
+3. 写入 prompt
+4. 点击发送
+5. 监听最后一个回答节点
+6. 识别结束
+7. 将流式文本回传 background
+
+### 验收
+- 在 DeepSeek 网页中可自动发送 prompt
+- side panel 能实时显示回答
+- 最终状态进入 done
+
+> 建议先做 DeepSeek，因为通常结构相对容易调试。
+
+---
+
+## Phase 6：实现 ChatGPT 适配器
+
+### 任务
+1. 实现 `chatgpt.ts`
+2. 处理可能的 textarea / contenteditable 两种输入
+3. 监听回答节点流式文本
+4. 完成状态判断
+
+### 验收
+- ChatGPT 可成功自动化一次提问
+- 回答可实时同步到 side panel
+
+---
+
+## Phase 7：实现 Gemini 适配器
+
+### 任务
+1. 实现 `gemini.ts`
+2. 做多选择器容错
+3. 完成流式抓取和结束判断
+
+### 验收
+- Gemini 可成功自动发送和同步回答
+
+---
+
+## Phase 8：完善 UI 和容错
+
+### 任务
+1. 增加状态 badge
+2. 增加错误提示
+3. 增加单 provider 重试
+4. 增加复制按钮
+5. 增加最近一次任务恢复
