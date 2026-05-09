@@ -1,7 +1,14 @@
 import React from 'react';
 import { useStore } from '../store';
-import type { HistoryEntry } from '../../shared/types';
+import type { HistoryEntry, ProviderName } from '../../shared/types';
+import { ALL_PROVIDERS } from '../../shared/constants';
 import styles from './HistoryList.module.css';
+
+const PROVIDER_LABELS: Record<ProviderName, string> = {
+  chatgpt: 'ChatGPT',
+  gemini: 'Gemini',
+  deepseek: 'DeepSeek',
+};
 
 const HistoryList: React.FC = () => {
   const history = useStore((s) => s.history);
@@ -77,8 +84,6 @@ const HistoryRow: React.FC<{
   const date = new Date(entry.createdAt);
   const dateStr = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
   const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const done = Object.values(entry.providers).filter((p) => p.status === 'done').length;
-  const total = Object.keys(entry.providers).length;
 
   return (
     <button className={styles.row} onClick={onClick}>
@@ -88,8 +93,22 @@ const HistoryRow: React.FC<{
       </div>
       <div className={styles.rowMeta}>
         <span>{dateStr} {timeStr}</span>
-        <span>·</span>
-        <span>{done}/{total} done</span>
+        {ALL_PROVIDERS.map((p) => {
+          const ps = entry.providers[p];
+          if (!ps?.url) return null;
+          return (
+            <a
+              key={p}
+              className={`${styles.provLink} ${ps.status === 'done' ? styles.provDone : styles.provError}`}
+              href={ps.url}
+              target="_blank"
+              title={`Open ${PROVIDER_LABELS[p]} conversation`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {PROVIDER_LABELS[p]}
+            </a>
+          );
+        })}
       </div>
     </button>
   );

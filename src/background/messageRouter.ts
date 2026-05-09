@@ -14,10 +14,20 @@ async function saveToHistory(task: AskTaskState): Promise<void> {
     providers: {} as HistoryEntry['providers'],
   };
   for (const [p, ps] of Object.entries(task.providers)) {
+    let url: string | undefined;
+    if (ps.tabId !== undefined) {
+      try {
+        const tab = await chrome.tabs.get(ps.tabId);
+        url = tab.url;
+      } catch {
+        // Tab may have been closed
+      }
+    }
     entry.providers[p as ProviderName] = {
       status: ps.status,
       content: ps.content,
       tabId: ps.tabId,
+      url,
     };
   }
 

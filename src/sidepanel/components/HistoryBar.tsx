@@ -1,40 +1,57 @@
 import React from 'react';
 import { useStore } from '../store';
-import type { HistoryEntry } from '../../shared/types';
+import type { HistoryEntry, ProviderName } from '../../shared/types';
+import { ALL_PROVIDERS } from '../../shared/constants';
 import styles from './HistoryBar.module.css';
+
+const PROVIDER_INITIAL: Record<ProviderName, string> = {
+  chatgpt: 'C',
+  gemini: 'G',
+  deepseek: 'D',
+};
 
 const HistoryItem: React.FC<{ entry: HistoryEntry; onDelete: () => void; onClick: () => void }> = ({
   entry,
   onDelete,
   onClick,
 }) => {
-  const done = Object.values(entry.providers).filter(
-    (p) => p.status === 'done' || p.status === 'error'
-  ).length;
-  const total = Object.keys(entry.providers).length;
   const date = new Date(entry.createdAt);
   const timeStr = isToday(date)
     ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 
   return (
-    <button className={styles.item} onClick={onClick}>
-      <span className={styles.time}>{timeStr}</span>
-      <span className={styles.prompt}>{entry.prompt.slice(0, 60)}</span>
-      <span className={styles.meta}>
-        {done}/{total}
+    <div className={styles.itemRow}>
+      <button className={styles.item} onClick={onClick}>
+        <span className={styles.time}>{timeStr}</span>
+        <span className={styles.prompt}>{entry.prompt.slice(0, 60)}</span>
+      </button>
+      <span className={styles.links}>
+        {ALL_PROVIDERS.map((p) => {
+          const ps = entry.providers[p];
+          if (!ps?.url) return null;
+          return (
+            <a
+              key={p}
+              className={`${styles.link} ${ps.status === 'done' ? styles.linkDone : styles.linkError}`}
+              href={ps.url}
+              target="_blank"
+              title={`${p}: ${ps.status}`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {PROVIDER_INITIAL[p]}
+            </a>
+          );
+        })}
       </span>
       <span
         className={styles.deleteBtn}
-        onClick={(e) => {
-          e.stopPropagation();
-          onDelete();
-        }}
+        onClick={() => onDelete()}
         title="Delete"
       >
         ×
       </span>
-    </button>
+    </div>
   );
 };
 
@@ -53,7 +70,6 @@ const HistoryBar: React.FC = () => {
   const loadHistory = useStore((s) => s.loadHistory);
   const historyLoaded = useStore((s) => s.history.length > 0 || s.showHistoryList);
 
-  // Load history on first render
   React.useEffect(() => {
     if (!historyLoaded) {
       loadHistory();

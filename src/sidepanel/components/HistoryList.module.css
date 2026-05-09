@@ -158,3 +158,32 @@
   font-size: 11px;
   color: #9ca3af;
 }
+
+.provLink {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 10px;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+
+.provDone {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.provDone:hover {
+  background: #22c55e;
+  color: #fff;
+}
+
+.provError {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.provError:hover {
+  background: #ef4444;
+  color: #fff;
+}

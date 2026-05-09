@@ -116,6 +116,7 @@ export interface HistoryEntry {
     status: ProviderStatus;
     content: string;
     tabId?: number;
+    url?: string;
   }>;
 }
 
