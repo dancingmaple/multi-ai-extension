@@ -24,7 +24,7 @@ const App: React.FC = () => {
       if (msg.type === 'TASK_STATE_UPDATE') {
         setTask(msg.task);
         const allDone = Object.values(msg.task.providers).every(
-          (p) => p.status === 'done' || p.status === 'error' || p.status === 'login_required'
+          (p) => p.status === 'done' || p.status === 'error' || p.status === 'login_required' || p.status === 'idle'
         );
         if (allDone) {
           useStore.setState({ isLoading: false });

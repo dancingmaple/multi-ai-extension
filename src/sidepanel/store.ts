@@ -92,12 +92,20 @@ export const useStore = create<PanelState>((set, get) => ({
     const taskId = generateTaskId();
     set({ currentTaskId: taskId, isLoading: true });
 
-    await sendToBackground({
-      type: 'ASK_ALL',
-      taskId,
-      prompt: prompt.trim(),
-      targets: selectedProviders,
-    });
+    // Safety timeout: force-clear loading after 5 minutes
+    const safetyTimer = setTimeout(() => set({ isLoading: false }), 300000);
+
+    try {
+      await sendToBackground({
+        type: 'ASK_ALL',
+        taskId,
+        prompt: prompt.trim(),
+        targets: selectedProviders,
+      });
+    } catch {
+      set({ isLoading: false });
+      clearTimeout(safetyTimer);
+    }
   },
 
   retryProvider: async (provider) => {
