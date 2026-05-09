@@ -9,20 +9,25 @@ export class DeepSeekAdapter extends BaseAdapter {
     'textarea[placeholder*="发送"]',
     'textarea[placeholder*="message"]',
     'textarea[placeholder*="Message"]',
+    'textarea[placeholder*="Send"]',
     '#chat-input',
     'textarea',
+    'div[contenteditable="true"]',
   ];
 
   readonly submitSelectors = [
     'button[aria-label*="发送"]',
     'button[aria-label*="Send"]',
     'div[role="button"][aria-label*="发送"]',
+    'div[role="button"][aria-label*="send"]',
+    'button:has(svg)',
   ];
 
   readonly responseSelectors = [
     '[class*="ds-markdown"]',
     '.ds-markdown',
     '[class*="markdown"]',
+    '[class*="message"] [class*="content"]',
   ];
 
   readonly loginSelectors = [
@@ -36,10 +41,15 @@ export class DeepSeekAdapter extends BaseAdapter {
     try {
       await super.submit();
     } catch {
-      const input = document.querySelector<HTMLElement>(this.inputSelectors[0]);
+      const input = document.querySelector<HTMLElement>(
+        'textarea, div[contenteditable="true"], #chat-input'
+      );
       if (input) {
         input.dispatchEvent(
-          new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true })
+          new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, composed: true })
+        );
+        input.dispatchEvent(
+          new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true, composed: true })
         );
       } else {
         throw new Error('DeepSeek: cannot submit — no button and no input found');

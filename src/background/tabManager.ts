@@ -4,16 +4,24 @@ import { TAB_SETTLE_MS, PING_RETRY_MAX, PING_RETRY_DELAY_MS } from '../shared/co
 import { sleep } from '../shared/utils';
 
 export async function getOrCreateProviderTab(provider: ProviderName): Promise<number> {
+  console.log('[MultiAI:tabManager] getOrCreateProviderTab for', provider);
   const existing = await findExistingTab(provider);
-  if (existing !== null) return existing;
+  if (existing !== null) {
+    console.log('[MultiAI:tabManager] Found existing tab', existing, 'for', provider);
+    return existing;
+  }
 
   const url = getProviderUrl(provider);
+  console.log('[MultiAI:tabManager] Creating new tab for', url);
   const tab = await chrome.tabs.create({ url, active: false });
   if (!tab.id) throw new Error(`Failed to create tab for ${provider}`);
+  console.log('[MultiAI:tabManager] Created tab', tab.id, 'for', provider);
 
   await waitForTabReady(tab.id);
+  console.log('[MultiAI:tabManager] Tab', tab.id, 'ready, settling...');
   await sleep(TAB_SETTLE_MS);
   await ensureContentScriptReady(tab.id);
+  console.log('[MultiAI:tabManager] Content script ready in tab', tab.id);
 
   return tab.id;
 }

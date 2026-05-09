@@ -33,6 +33,7 @@ const manifest: ManifestV3Export = {
   ],
   action: {
     default_title: 'Open Multi AI Panel',
+    default_popup: 'public/popup.html',
   },
   icons: {
     '16': 'public/icon-16.png',

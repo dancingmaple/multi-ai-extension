@@ -1,3 +1,2 @@
-import { initMessageRouter } from './messageRouter';
-
-initMessageRouter().catch(console.error);
+// Message router auto-initializes on import (registers listeners synchronously)
+import './messageRouter';
