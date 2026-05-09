@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { useStore } from './store';
-import { PromptInput, StatusBar, HistoryBar, HistoryList, SettingsPanel, IframeGrid } from './components';
+import { PromptInput, StatusBar, HistoryBar, HistoryList, SettingsPanel } from './components';
 import type { BackgroundToUIMessage } from '../shared/types';
 import styles from './App.module.css';
 
@@ -9,8 +9,6 @@ const App: React.FC = () => {
   const restoreLastTask = useStore((s) => s.restoreLastTask);
   const panelMode = useStore((s) => s.panelMode);
   const switchPanelMode = useStore((s) => s.switchPanelMode);
-  const visibleProviders = useStore((s) => s.visibleProviders);
-  const toggleVisibleProvider = useStore((s) => s.toggleVisibleProvider);
   const showHistoryList = useStore((s) => s.showHistoryList);
   const loadHistory = useStore((s) => s.loadHistory);
   const showSettings = useStore((s) => s.showSettings);
@@ -30,7 +28,6 @@ const App: React.FC = () => {
         );
         if (allDone) {
           useStore.setState({ isLoading: false });
-          // Reload history when task completes
           loadHistory();
         }
       }
@@ -71,9 +68,6 @@ const App: React.FC = () => {
       <PromptInput />
       <StatusBar />
       <HistoryBar />
-      {isFullscreen && (
-        <IframeGrid visibleProviders={visibleProviders} onToggle={toggleVisibleProvider} />
-      )}
       {showHistoryList && <HistoryList />}
       {showSettings && <SettingsPanel />}
     </div>

@@ -30,9 +30,15 @@ export const PING_RETRY_DELAY_MS = 1000;
 export const SETTINGS_KEY = 'app_settings';
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  responseTimeoutMs: 120000,
   elementTimeoutMs: 15000,
-  deepseekResponseTimeoutMs: 45000,
+  responseTimeoutMs: {
+    chatgpt: 120000,
+    gemini: 120000,
+    deepseek: 45000,
+    qwen: 45000,
+    zai: 45000,
+    doubao: 45000,
+  },
 };
 
 export const ERROR_CODES = {

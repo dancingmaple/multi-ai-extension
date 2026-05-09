@@ -109,9 +109,8 @@ export type ContentToBackgroundMessage =
 // ── Settings ───────────────────────────────────────────
 
 export interface AppSettings {
-  responseTimeoutMs: number;
   elementTimeoutMs: number;
-  deepseekResponseTimeoutMs: number;
+  responseTimeoutMs: Record<ProviderName, number>;
 }
 
 // ── History ────────────────────────────────────────────

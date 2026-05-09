@@ -86,7 +86,7 @@ export class DeepSeekAdapter extends BaseAdapter {
         let responseEl = findResponseElement();
         if (!responseEl) {
           // Use deepseek-specific timeout, falling back to general response timeout
-          const maxRetries = Math.ceil((this.timeoutSettings?.deepseekResponseTimeoutMs ?? 45000) / 1000);
+          const maxRetries = Math.ceil(this.getResponseMaxWait() / 1000);
           for (let i = 0; i < maxRetries && !cancelled; i++) {
             await new Promise((r) => setTimeout(r, 1000));
             responseEl = findResponseElement();

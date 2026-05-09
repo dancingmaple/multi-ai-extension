@@ -35,7 +35,10 @@ export abstract class BaseAdapter implements SiteAdapter {
   }
 
   protected getResponseMaxWait(): number {
-    return this.timeoutSettings?.responseTimeoutMs ?? 120000;
+    if (this.timeoutSettings?.responseTimeoutMs) {
+      return this.timeoutSettings.responseTimeoutMs[this.provider] ?? 120000;
+    }
+    return 120000;
   }
   protected readonly loginTextPatterns: string[] = [];
 
