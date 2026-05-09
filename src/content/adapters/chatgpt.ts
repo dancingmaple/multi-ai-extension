@@ -17,17 +17,14 @@ export class ChatGPTAdapter extends BaseAdapter {
 
   readonly submitSelectors = [
     'button[data-testid="send-button"]',
+    'button[aria-label="Send prompt"]',
     'button[aria-label*="Send"]',
     'button[aria-label*="发送"]',
     'button[aria-label*="send"]',
-    'button.cursor-pointer[type="button"]',
-    'button:has(svg)',
   ];
 
   readonly responseSelectors = [
-    '[data-message-author-role="assistant"] article',
     '[data-message-author-role="assistant"]',
-    'article[data-testid^="conversation-turn"]',
     '.markdown.prose',
     '.markdown',
     '[class*="agent-turn"]',

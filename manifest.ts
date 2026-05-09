@@ -3,9 +3,9 @@ import { type ManifestV3Export } from '@crxjs/vite-plugin';
 const manifest: ManifestV3Export = {
   manifest_version: 3,
   name: 'Multi AI Web Automation',
-  version: '0.1.0',
-  description: 'Send one prompt to multiple AI web apps and view answers in one side panel',
-  permissions: ['tabs', 'storage', 'scripting', 'sidePanel'],
+  version: '0.3.0',
+  description: 'Send one prompt to multiple AI web apps and view answers side by side',
+  permissions: ['tabs', 'storage', 'scripting', 'sidePanel', 'webNavigation'],
   host_permissions: [
     'https://chatgpt.com/*',
     'https://gemini.google.com/*',
@@ -33,7 +33,6 @@ const manifest: ManifestV3Export = {
   ],
   action: {
     default_title: 'Open Multi AI Panel',
-    default_popup: 'public/popup.html',
   },
   icons: {
     '16': 'public/icon-16.png',

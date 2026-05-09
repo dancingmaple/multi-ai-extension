@@ -13,12 +13,15 @@ export function setContentEditableValue(element: HTMLElement, value: string): vo
   element.focus();
   element.textContent = value;
   element.dispatchEvent(new InputEvent('input', { bubbles: true, data: value }));
+  element.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
 export function clickElement(element: HTMLElement): void {
-  element.click();
+  element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
   element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  element.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
   element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+  element.click();
 }
 
 export function sleep(ms: number): Promise<void> {

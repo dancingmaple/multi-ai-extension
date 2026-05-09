@@ -60,16 +60,24 @@ export function onBackgroundMessage(
     msg: BackgroundToContentMessage,
     sender: chrome.runtime.MessageSender,
     sendResponse: (response?: unknown) => void
-  ) => {
+  ): boolean => {
     log('onBackgroundMessage received', msg.type, 'from tab', sender.tab?.id);
-    if (msg.type === 'EXECUTE_PROMPT' || msg.type === 'PING') {
+    if (msg.type === 'PING') {
       const result = handler(msg, sender);
+      // PING expects a sync response — send it and close the channel
       if (result !== undefined && typeof result !== 'boolean') {
         sendResponse(result);
       }
+      return false; // No async response needed
     }
-    // Return true to keep the message channel open for async sendResponse
-    return true;
+    if (msg.type === 'EXECUTE_PROMPT') {
+      handler(msg, sender);
+      // Send immediate ACK and close channel — content script reports progress
+      // via separate chrome.runtime.sendMessage calls
+      sendResponse({ type: 'ACK' });
+      return false;
+    }
+    return false;
   };
   chrome.runtime.onMessage.addListener(listener);
   return () => chrome.runtime.onMessage.removeListener(listener);

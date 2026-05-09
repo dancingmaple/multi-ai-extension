@@ -7,8 +7,16 @@ export async function getOrCreateProviderTab(provider: ProviderName): Promise<nu
   console.log('[MultiAI:tabManager] getOrCreateProviderTab for', provider);
   const existing = await findExistingTab(provider);
   if (existing !== null) {
-    console.log('[MultiAI:tabManager] Found existing tab', existing, 'for', provider);
-    return existing;
+    // Check if content script is actually alive (might be stale after extension reload)
+    try {
+      await ensureContentScriptReady(existing);
+      console.log('[MultiAI:tabManager] Found existing tab', existing, 'for', provider);
+      return existing;
+    } catch {
+      console.log('[MultiAI:tabManager] Existing tab', existing, 'has stale content script, creating new tab');
+      // Close the stale tab
+      chrome.tabs.remove(existing).catch(() => {});
+    }
   }
 
   const url = getProviderUrl(provider);

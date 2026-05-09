@@ -79,7 +79,8 @@ export abstract class BaseAdapter implements SiteAdapter {
   }
 
   async submit(): Promise<void> {
-    const btn = await waitForElement(this.submitSelectors, ELEMENT_TIMEOUT_MS);
+    // Use shorter timeout for submit — button should already exist after setPrompt
+    const btn = await waitForElement(this.submitSelectors, 5000);
     if (!(btn instanceof HTMLElement)) {
       throw new SubmitFailedError(this.provider, 'Submit button not an HTMLElement');
     }
@@ -94,9 +95,26 @@ export abstract class BaseAdapter implements SiteAdapter {
     let cancelled = false;
     let cleanupObserve: (() => void) | null = null;
 
+    const findResponse = async (): Promise<HTMLElement> => {
+      // Try primary selectors (fast, 10s timeout)
+      try {
+        return await waitForElement(this.responseSelectors, 10000);
+      } catch {
+        // Fallback: try finding any markdown or content container
+        const broad = [
+          '[class*="markdown"]',
+          '[class*="response"]',
+          '[class*="assistant"]',
+          '[class*="message"] [class*="content"]',
+          '[data-message-author-role="assistant"]',
+        ];
+        return await waitForElement(broad, 20000);
+      }
+    };
+
     const start = async () => {
       try {
-        const responseEl = await waitForElement(this.responseSelectors, 30000);
+        const responseEl = await findResponse();
         if (cancelled) return;
 
         let lastText = '';

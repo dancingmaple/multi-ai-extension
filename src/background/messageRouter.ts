@@ -1,8 +1,5 @@
 import type { UIMessage, AskTaskState, ProviderName, ProviderStatus } from '../shared/types';
-import {
-  sendToContent,
-  broadcastTaskState,
-} from '../shared/messaging';
+import { broadcastTaskState } from '../shared/messaging';
 import { createTask, getTask, updateProviderStatus, updateProviderContent, finishProviderTask, failProviderTask, setProviderTabId, loadLastTask } from './stateStore';
 import { getOrCreateProviderTab } from './tabManager';
 
@@ -18,7 +15,7 @@ console.log('[MultiAI:background] Service worker starting...');
 chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
   const msg = rawMsg as Record<string, unknown>;
   // Route UI messages (from side panel / popup)
-  if (msg.type === 'ASK_ALL' || msg.type === 'GET_TASK_STATE' || msg.type === 'RETRY_PROVIDER') {
+  if (msg.type === 'ASK_ALL' || msg.type === 'GET_TASK_STATE' || msg.type === 'RETRY_PROVIDER' || msg.type === 'SWITCH_MODE') {
     if (!ready) {
       console.log('[MultiAI:background] Queuing message, not ready yet:', msg.type);
       pendingMessages.push({ msg: msg as Record<string, unknown>, sender, sendResponse });
@@ -40,10 +37,18 @@ chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
       return true;
     }
     handleContentMessage(rawMsg as Record<string, unknown>);
-    return false; // sync, no response needed
+    sendResponse();
+    return false;
   }
 
   return false;
+});
+
+// ── Action click handler ────────────────────────────────
+// Default: open as fullscreen tab. Can switch to side panel via toggle.
+
+chrome.action.onClicked.addListener(() => {
+  openFullscreen();
 });
 
 // ── Async initialization ───────────────────────────────
@@ -53,26 +58,58 @@ async function doInit(): Promise<void> {
 
   await loadLastTask();
 
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {
-    // Side panel may not be available in all contexts
-  });
-
   ready = true;
   console.log('[MultiAI:background] Ready, processing', pendingMessages.length, 'pending messages');
 
   // Process any queued messages
   for (const { msg, sender, sendResponse } of pendingMessages) {
-    if (msg.type === 'ASK_ALL' || msg.type === 'GET_TASK_STATE' || msg.type === 'RETRY_PROVIDER') {
+    if (msg.type === 'ASK_ALL' || msg.type === 'GET_TASK_STATE' || msg.type === 'RETRY_PROVIDER' || msg.type === 'SWITCH_MODE') {
       await handleUIMessage(msg as UIMessage, sender);
-      sendResponse();
     } else {
       handleContentMessage(msg as Record<string, unknown>);
     }
+    sendResponse();
   }
   pendingMessages.length = 0;
 }
 
 doInit().catch(console.error);
+
+// ── Mode switching ──────────────────────────────────────
+
+let fullscreenTabId: number | undefined;
+
+async function openFullscreen(): Promise<void> {
+  const url = chrome.runtime.getURL('public/sidepanel.html') + '?mode=fullscreen';
+  // Reuse existing tab if still open
+  if (fullscreenTabId !== undefined) {
+    try {
+      const tab = await chrome.tabs.get(fullscreenTabId);
+      if (tab) {
+        await chrome.tabs.update(fullscreenTabId, { active: true });
+        if (tab.windowId !== undefined) {
+          await chrome.windows.update(tab.windowId, { focused: true });
+        }
+        return;
+      }
+    } catch {
+      fullscreenTabId = undefined;
+    }
+  }
+  const tab = await chrome.tabs.create({ url, active: true });
+  if (tab.id) fullscreenTabId = tab.id;
+}
+
+async function openSidePanel(): Promise<void> {
+  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  // Close fullscreen tab
+  if (fullscreenTabId !== undefined) {
+    await chrome.tabs.remove(fullscreenTabId).catch(() => {});
+    fullscreenTabId = undefined;
+  }
+  // Open side panel
+  chrome.sidePanel.open({ windowId: -1 } as any).catch(() => {});
+}
 
 // ── Handlers ────────────────────────────────────────────
 
@@ -100,6 +137,14 @@ async function handleUIMessage(
         updateProviderStatus(msg.taskId, msg.provider, 'waiting');
         broadcastTaskState({ type: 'TASK_STATE_UPDATE', task: getTask(msg.taskId)! });
         await dispatchToProvider(msg.taskId, msg.provider, task.prompt);
+      }
+      break;
+    }
+    case 'SWITCH_MODE': {
+      if (msg.target === 'fullscreen') {
+        await openFullscreen();
+      } else {
+        await openSidePanel();
       }
       break;
     }
@@ -161,6 +206,7 @@ async function dispatchToProvider(
     updateProviderStatus(taskId, provider, 'waiting');
     broadcastTaskState({ type: 'TASK_STATE_UPDATE', task: getTask(taskId)! });
 
+    // Always use hidden tabs for reliable automation
     const tabId = await getOrCreateProviderTab(provider);
     console.log('[MultiAI:background] Got tab', tabId, 'for', provider);
     setProviderTabId(taskId, provider, tabId);
@@ -169,12 +215,13 @@ async function dispatchToProvider(
     broadcastTaskState({ type: 'TASK_STATE_UPDATE', task: getTask(taskId)! });
 
     console.log('[MultiAI:background] Sending EXECUTE_PROMPT to tab', tabId);
-    await sendToContent(tabId, {
+    await chrome.tabs.sendMessage(tabId, {
       type: 'EXECUTE_PROMPT',
       taskId,
       provider,
       prompt,
     });
+
     console.log('[MultiAI:background] EXECUTE_PROMPT sent to', provider);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';

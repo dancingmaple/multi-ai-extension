@@ -45,7 +45,12 @@ export type RetryProviderMessage = {
   provider: ProviderName;
 };
 
-export type UIMessage = AskAllMessage | GetTaskStateMessage | RetryProviderMessage;
+export type SwitchModeMessage = {
+  type: 'SWITCH_MODE';
+  target: 'fullscreen' | 'sidepanel';
+};
+
+export type UIMessage = AskAllMessage | GetTaskStateMessage | RetryProviderMessage | SwitchModeMessage;
 
 // ── Background → Content ───────────────────────────────
 

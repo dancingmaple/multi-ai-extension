@@ -1,0 +1,162 @@
+.container {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px;
+  flex-shrink: 0;
+}
+
+.btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  cursor: default;
+  font-size: 12px;
+  font-family: inherit;
+  color: #9ca3af;
+  transition: all 0.2s;
+  flex: 1;
+  min-width: 0;
+}
+
+.btn:disabled {
+  opacity: 0.7;
+}
+
+.label {
+  font-weight: 600;
+  white-space: nowrap;
+  color: #6b7280;
+}
+
+.status {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-left: auto;
+}
+
+/* ── States ──────────────────────────────── */
+
+.idle {
+  color: #d1d5db;
+}
+
+.waiting {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #3b82f6;
+}
+
+.waiting .label {
+  color: #2563eb;
+}
+
+.sending {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #d97706;
+}
+
+.sending .label {
+  color: #b45309;
+}
+
+.streaming {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #16a34a;
+}
+
+.streaming .label {
+  color: #15803d;
+}
+
+.done {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #16a34a;
+}
+
+.done .label {
+  color: #15803d;
+}
+
+.error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.error .label {
+  color: #b91c1c;
+}
+
+.login_required {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.login_required .label {
+  color: #b91c1c;
+}
+
+.clickable {
+  cursor: pointer;
+}
+
+.clickable:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.clickable:active {
+  transform: translateY(0);
+}
+
+/* ── Icons ───────────────────────────────── */
+
+.iconDone {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.iconError {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.iconStreaming {
+  font-size: 10px;
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.iconSending {
+  font-size: 14px;
+  animation: bounce 0.8s ease-in-out infinite;
+}
+
+.iconWaiting {
+  font-size: 16px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.iconIdle {
+  font-size: 12px;
+  color: #d1d5db;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
