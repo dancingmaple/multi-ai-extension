@@ -3,4 +3,6 @@ export { default as ProviderTabs } from './ProviderTabs';
 export { default as StatusBadge } from './StatusBadge';
 export { default as ResponseView } from './ResponseView';
 export { default as StatusBar } from './StatusBar';
+export { default as HistoryBar } from './HistoryBar';
+export { default as HistoryList } from './HistoryList';
 export { IframeGrid } from './IframeGrid';

@@ -1,9 +1,12 @@
 import { create } from 'zustand';
-import type { ProviderName, AskTaskState } from '../shared/types';
+import type { ProviderName, AskTaskState, HistoryEntry } from '../shared/types';
 import { ALL_PROVIDERS } from '../shared/constants';
 import { sendToBackground, generateTaskId } from '../shared/messaging';
 
 export type PanelMode = 'fullscreen' | 'sidepanel';
+
+const HISTORY_KEY = 'conversation_history';
+const MAX_HISTORY = 200;
 
 function detectMode(): PanelMode {
   if (typeof window !== 'undefined' && window.location.search.includes('mode=fullscreen')) {
@@ -21,6 +24,9 @@ interface PanelState {
   task: AskTaskState | undefined;
   isLoading: boolean;
   panelMode: PanelMode;
+  history: HistoryEntry[];
+  showHistoryList: boolean;
+  historySearch: string;
 
   setPrompt: (prompt: string) => void;
   toggleProvider: (provider: ProviderName) => void;
@@ -31,6 +37,10 @@ interface PanelState {
   retryProvider: (provider: ProviderName) => Promise<void>;
   restoreLastTask: () => Promise<void>;
   switchPanelMode: () => Promise<void>;
+  loadHistory: () => Promise<void>;
+  deleteHistoryItem: (id: string) => Promise<void>;
+  setHistorySearch: (query: string) => void;
+  setShowHistoryList: (show: boolean) => void;
 }
 
 export const useStore = create<PanelState>((set, get) => ({
@@ -42,6 +52,9 @@ export const useStore = create<PanelState>((set, get) => ({
   task: undefined,
   isLoading: false,
   panelMode: detectMode(),
+  history: [],
+  showHistoryList: false,
+  historySearch: '',
 
   setPrompt: (prompt) => set({ prompt }),
 
@@ -111,9 +124,25 @@ export const useStore = create<PanelState>((set, get) => ({
     const target = panelMode === 'fullscreen' ? 'sidepanel' : 'fullscreen';
     await sendToBackground({ type: 'SWITCH_MODE', target } as any);
     set({ panelMode: target });
-    // If switching from fullscreen to side panel, close this tab
     if (panelMode === 'fullscreen') {
       window.close();
     }
   },
+
+  loadHistory: async () => {
+    const result = await chrome.storage.local.get(HISTORY_KEY);
+    const history = (result[HISTORY_KEY] || []) as HistoryEntry[];
+    set({ history });
+  },
+
+  deleteHistoryItem: async (id: string) => {
+    const { history } = get();
+    const updated = history.filter((h) => h.id !== id);
+    set({ history: updated });
+    await chrome.storage.local.set({ [HISTORY_KEY]: updated.slice(0, MAX_HISTORY) });
+  },
+
+  setHistorySearch: (query: string) => set({ historySearch: query }),
+
+  setShowHistoryList: (show: boolean) => set({ showHistoryList: show }),
 }));

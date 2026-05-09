@@ -106,6 +106,19 @@ export type ContentToBackgroundMessage =
   | TaskDoneMessage
   | TaskErrorMessage;
 
+// ── History ────────────────────────────────────────────
+
+export interface HistoryEntry {
+  id: string;
+  prompt: string;
+  createdAt: number;
+  providers: Record<ProviderName, {
+    status: ProviderStatus;
+    content: string;
+    tabId?: number;
+  }>;
+}
+
 // ── Background → UI (state broadcast) ──────────────────
 
 export type TaskStateUpdateMessage = {
@@ -113,4 +126,9 @@ export type TaskStateUpdateMessage = {
   task: AskTaskState;
 };
 
-export type BackgroundToUIMessage = TaskStateUpdateMessage;
+export type HistoryUpdateMessage = {
+  type: 'HISTORY_UPDATE';
+  entry: HistoryEntry;
+};
+
+export type BackgroundToUIMessage = TaskStateUpdateMessage | HistoryUpdateMessage;

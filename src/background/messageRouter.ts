@@ -1,7 +1,41 @@
-import type { UIMessage, AskTaskState, ProviderName, ProviderStatus } from '../shared/types';
+import type { UIMessage, AskTaskState, ProviderName, ProviderStatus, HistoryEntry } from '../shared/types';
 import { broadcastTaskState } from '../shared/messaging';
 import { createTask, getTask, updateProviderStatus, updateProviderContent, finishProviderTask, failProviderTask, setProviderTabId, loadLastTask } from './stateStore';
 import { getOrCreateProviderTab } from './tabManager';
+
+const HISTORY_KEY = 'conversation_history';
+const MAX_HISTORY = 200;
+
+async function saveToHistory(task: AskTaskState): Promise<void> {
+  const entry: HistoryEntry = {
+    id: task.taskId,
+    prompt: task.prompt,
+    createdAt: task.createdAt,
+    providers: {} as HistoryEntry['providers'],
+  };
+  for (const [p, ps] of Object.entries(task.providers)) {
+    entry.providers[p as ProviderName] = {
+      status: ps.status,
+      content: ps.content,
+      tabId: ps.tabId,
+    };
+  }
+
+  const result = await chrome.storage.local.get(HISTORY_KEY);
+  const history: HistoryEntry[] = result[HISTORY_KEY] || [];
+  // Remove duplicate if exists, then prepend
+  const filtered = history.filter((h) => h.id !== entry.id);
+  filtered.unshift(entry);
+  // Trim to max
+  const trimmed = filtered.slice(0, MAX_HISTORY);
+  await chrome.storage.local.set({ [HISTORY_KEY]: trimmed });
+}
+
+function providersAllDone(task: AskTaskState): boolean {
+  return Object.values(task.providers).every(
+    (p) => p.status === 'done' || p.status === 'error' || p.status === 'login_required'
+  );
+}
 
 let ready = false;
 const pendingMessages: Array<{ msg: Record<string, unknown>; sender: chrome.runtime.MessageSender; sendResponse: (r?: unknown) => void }> = [];
@@ -177,6 +211,10 @@ function handleContentMessage(
 
   if (updatedTask) {
     broadcastTaskState({ type: 'TASK_STATE_UPDATE', task: updatedTask });
+    // Save to history when all providers have finished
+    if (providersAllDone(updatedTask)) {
+      saveToHistory(updatedTask).catch(console.error);
+    }
   }
 }
 
