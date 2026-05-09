@@ -30,6 +30,21 @@
   gap: 6px;
 }
 
+.iconBtn {
+  border: 1px solid transparent;
+  background: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.iconBtn:hover {
+  background: #f3f4f6;
+  border-color: #e5e7eb;
+}
+
 .modeBtn {
   border: 1px solid #d1d5db;
   background: #fff;

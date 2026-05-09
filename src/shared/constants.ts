@@ -1,4 +1,4 @@
-import type { ProviderName } from './types';
+import type { ProviderName, AppSettings } from './types';
 
 export const PROVIDER_URLS: Record<ProviderName, string> = {
   chatgpt: 'https://chatgpt.com/',
@@ -20,6 +20,14 @@ export const TAB_SETTLE_MS = 3000;
 export const ELEMENT_TIMEOUT_MS = 15000;
 export const PING_RETRY_MAX = 5;
 export const PING_RETRY_DELAY_MS = 1000;
+
+export const SETTINGS_KEY = 'app_settings';
+
+export const DEFAULT_SETTINGS: AppSettings = {
+  responseTimeoutMs: 120000,
+  elementTimeoutMs: 15000,
+  deepseekResponseTimeoutMs: 45000,
+};
 
 export const ERROR_CODES = {
   ELEMENT_NOT_FOUND: 'ELEMENT_NOT_FOUND',

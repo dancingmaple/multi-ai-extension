@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { useStore } from './store';
-import { PromptInput, StatusBar, HistoryBar, HistoryList, IframeGrid } from './components';
+import { PromptInput, StatusBar, HistoryBar, HistoryList, SettingsPanel, IframeGrid } from './components';
 import type { BackgroundToUIMessage } from '../shared/types';
 import styles from './App.module.css';
 
@@ -13,10 +13,14 @@ const App: React.FC = () => {
   const toggleVisibleProvider = useStore((s) => s.toggleVisibleProvider);
   const showHistoryList = useStore((s) => s.showHistoryList);
   const loadHistory = useStore((s) => s.loadHistory);
+  const showSettings = useStore((s) => s.showSettings);
+  const setShowSettings = useStore((s) => s.setShowSettings);
+  const loadSettings = useStore((s) => s.loadSettings);
 
   useEffect(() => {
     restoreLastTask();
     loadHistory();
+    loadSettings();
 
     const listener = (msg: BackgroundToUIMessage) => {
       if (msg.type === 'TASK_STATE_UPDATE') {
@@ -49,6 +53,13 @@ const App: React.FC = () => {
         <span className={styles.title}>Multi AI</span>
         <div className={styles.headerActions}>
           <button
+            className={styles.iconBtn}
+            onClick={() => setShowSettings(true)}
+            title="Settings"
+          >
+            ⚙
+          </button>
+          <button
             className={styles.modeBtn}
             onClick={switchPanelMode}
             title={isFullscreen ? 'Switch to Side Panel' : 'Switch to Fullscreen'}
@@ -64,6 +75,7 @@ const App: React.FC = () => {
         <IframeGrid visibleProviders={visibleProviders} onToggle={toggleVisibleProvider} />
       )}
       {showHistoryList && <HistoryList />}
+      {showSettings && <SettingsPanel />}
     </div>
   );
 };

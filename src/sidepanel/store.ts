@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import type { ProviderName, AskTaskState, HistoryEntry } from '../shared/types';
-import { ALL_PROVIDERS } from '../shared/constants';
+import type { ProviderName, AskTaskState, HistoryEntry, AppSettings } from '../shared/types';
+import { ALL_PROVIDERS, SETTINGS_KEY, DEFAULT_SETTINGS } from '../shared/constants';
 import { sendToBackground, generateTaskId } from '../shared/messaging';
 
 export type PanelMode = 'fullscreen' | 'sidepanel';
@@ -27,6 +27,8 @@ interface PanelState {
   history: HistoryEntry[];
   showHistoryList: boolean;
   historySearch: string;
+  settings: AppSettings;
+  showSettings: boolean;
 
   setPrompt: (prompt: string) => void;
   toggleProvider: (provider: ProviderName) => void;
@@ -41,6 +43,9 @@ interface PanelState {
   deleteHistoryItem: (id: string) => Promise<void>;
   setHistorySearch: (query: string) => void;
   setShowHistoryList: (show: boolean) => void;
+  loadSettings: () => Promise<void>;
+  saveSettings: (settings: AppSettings) => Promise<void>;
+  setShowSettings: (show: boolean) => void;
 }
 
 export const useStore = create<PanelState>((set, get) => ({
@@ -55,6 +60,8 @@ export const useStore = create<PanelState>((set, get) => ({
   history: [],
   showHistoryList: false,
   historySearch: '',
+  settings: { ...DEFAULT_SETTINGS },
+  showSettings: false,
 
   setPrompt: (prompt) => set({ prompt }),
 
@@ -145,4 +152,17 @@ export const useStore = create<PanelState>((set, get) => ({
   setHistorySearch: (query: string) => set({ historySearch: query }),
 
   setShowHistoryList: (show: boolean) => set({ showHistoryList: show }),
+
+  loadSettings: async () => {
+    const result = await chrome.storage.local.get(SETTINGS_KEY);
+    const settings = { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}) } as AppSettings;
+    set({ settings });
+  },
+
+  saveSettings: async (settings: AppSettings) => {
+    set({ settings });
+    await chrome.storage.local.set({ [SETTINGS_KEY]: settings });
+  },
+
+  setShowSettings: (show: boolean) => set({ showSettings: show }),
 }));

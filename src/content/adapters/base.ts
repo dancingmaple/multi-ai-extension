@@ -1,4 +1,4 @@
-import type { ProviderName } from '../../shared/types';
+import type { ProviderName, AppSettings } from '../../shared/types';
 import { waitForElement, observeTextChanges, waitForStableText } from '../dom/observer';
 import { setNativeInputValue, setContentEditableValue, clickElement, LoginRequiredError, SubmitFailedError } from '../../shared/utils';
 import { ELEMENT_TIMEOUT_MS, STREAM_THROTTLE_MS, DONE_STABLE_MS } from '../../shared/constants';
@@ -15,6 +15,7 @@ export interface SiteAdapter {
     onDone: (finalText: string) => void,
     onError: (err: Error) => void
   ): () => void;
+  setTimeouts(settings: AppSettings): void;
 }
 
 export abstract class BaseAdapter implements SiteAdapter {
@@ -23,6 +24,19 @@ export abstract class BaseAdapter implements SiteAdapter {
   abstract readonly submitSelectors: string[];
   abstract readonly responseSelectors: string[];
   abstract readonly loginSelectors: string[];
+  protected timeoutSettings: AppSettings | null = null;
+
+  setTimeouts(settings: AppSettings): void {
+    this.timeoutSettings = settings;
+  }
+
+  protected getElementTimeout(): number {
+    return this.timeoutSettings?.elementTimeoutMs ?? ELEMENT_TIMEOUT_MS;
+  }
+
+  protected getResponseMaxWait(): number {
+    return this.timeoutSettings?.responseTimeoutMs ?? 120000;
+  }
   protected readonly loginTextPatterns: string[] = [];
 
   async isReady(): Promise<boolean> {
@@ -51,12 +65,12 @@ export abstract class BaseAdapter implements SiteAdapter {
     return false;
   }
 
-  async waitForReady(timeoutMs: number = ELEMENT_TIMEOUT_MS): Promise<void> {
-    await waitForElement(this.inputSelectors, timeoutMs);
+  async waitForReady(timeoutMs?: number): Promise<void> {
+    await waitForElement(this.inputSelectors, timeoutMs ?? this.getElementTimeout());
   }
 
   async setPrompt(prompt: string): Promise<void> {
-    const el = await waitForElement(this.inputSelectors, ELEMENT_TIMEOUT_MS);
+    const el = await waitForElement(this.inputSelectors, this.getElementTimeout());
 
     if (this.detectLoginRequired()) {
       throw new LoginRequiredError(this.provider);
@@ -96,9 +110,10 @@ export abstract class BaseAdapter implements SiteAdapter {
     let cleanupObserve: (() => void) | null = null;
 
     const findResponse = async (): Promise<HTMLElement> => {
-      // Try primary selectors (fast, 10s timeout)
+      const elTimeout = this.getElementTimeout();
+      // Try primary selectors first with reduced timeout
       try {
-        return await waitForElement(this.responseSelectors, 10000);
+        return await waitForElement(this.responseSelectors, elTimeout);
       } catch {
         // Fallback: try finding any markdown or content container
         const broad = [
@@ -108,9 +123,11 @@ export abstract class BaseAdapter implements SiteAdapter {
           '[class*="message"] [class*="content"]',
           '[data-message-author-role="assistant"]',
         ];
-        return await waitForElement(broad, 20000);
+        return await waitForElement(broad, elTimeout);
       }
     };
+
+    const maxWait = this.getResponseMaxWait();
 
     const start = async () => {
       try {
@@ -127,7 +144,7 @@ export abstract class BaseAdapter implements SiteAdapter {
           }
         }, STREAM_THROTTLE_MS);
 
-        const finalText = await waitForStableText(responseEl, DONE_STABLE_MS, 120000);
+        const finalText = await waitForStableText(responseEl, DONE_STABLE_MS, maxWait);
         if (!cancelled) {
           onDone(finalText);
         }

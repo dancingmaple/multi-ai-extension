@@ -106,6 +106,14 @@ export type ContentToBackgroundMessage =
   | TaskDoneMessage
   | TaskErrorMessage;
 
+// ── Settings ───────────────────────────────────────────
+
+export interface AppSettings {
+  responseTimeoutMs: number;
+  elementTimeoutMs: number;
+  deepseekResponseTimeoutMs: number;
+}
+
 // ── History ────────────────────────────────────────────
 
 export interface HistoryEntry {

@@ -1,15 +1,33 @@
-import type { ProviderName, ExecutePromptMessage } from '../shared/types';
+import type { ProviderName, ExecutePromptMessage, AppSettings } from '../shared/types';
 import type { SiteAdapter } from './adapters/base';
 import { ChatGPTAdapter } from './adapters/chatgpt';
 import { GeminiAdapter } from './adapters/gemini';
 import { DeepSeekAdapter } from './adapters/deepseek';
 import { LoginRequiredError } from '../shared/utils';
+import { SETTINGS_KEY, DEFAULT_SETTINGS } from '../shared/constants';
 
 const adapters: Record<ProviderName, SiteAdapter> = {
   chatgpt: new ChatGPTAdapter(),
   gemini: new GeminiAdapter(),
   deepseek: new DeepSeekAdapter(),
 };
+
+let cachedSettings: AppSettings | null = null;
+
+async function loadSettings(): Promise<AppSettings> {
+  if (cachedSettings) return cachedSettings;
+  try {
+    const result = await chrome.storage.local.get(SETTINGS_KEY);
+    cachedSettings = { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}) } as AppSettings;
+  } catch {
+    cachedSettings = { ...DEFAULT_SETTINGS };
+  }
+  return cachedSettings;
+}
+
+export function clearSettingsCache(): void {
+  cachedSettings = null;
+}
 
 export async function executePrompt(
   msg: ExecutePromptMessage,
@@ -23,6 +41,9 @@ export async function executePrompt(
     sendError('UNKNOWN_PROVIDER', `Unknown provider: ${msg.provider}`);
     return;
   }
+
+  const settings = await loadSettings();
+  adapter.setTimeouts(settings);
 
   console.log('[MultiAI:executor] Starting execution for', msg.provider, 'prompt:', msg.prompt.substring(0, 80));
 

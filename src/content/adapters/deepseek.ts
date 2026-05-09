@@ -85,8 +85,9 @@ export class DeepSeekAdapter extends BaseAdapter {
 
         let responseEl = findResponseElement();
         if (!responseEl) {
-          // Wait longer and retry periodically
-          for (let i = 0; i < 20 && !cancelled; i++) {
+          // Use deepseek-specific timeout, falling back to general response timeout
+          const maxRetries = Math.ceil((this.timeoutSettings?.deepseekResponseTimeoutMs ?? 45000) / 1000);
+          for (let i = 0; i < maxRetries && !cancelled; i++) {
             await new Promise((r) => setTimeout(r, 1000));
             responseEl = findResponseElement();
             if (responseEl) break;
@@ -108,7 +109,7 @@ export class DeepSeekAdapter extends BaseAdapter {
           }
         }, STREAM_THROTTLE_MS);
 
-        const finalText = await waitForStableText(responseEl, DONE_STABLE_MS, 120000);
+        const finalText = await waitForStableText(responseEl, DONE_STABLE_MS, this.getResponseMaxWait());
         if (!cancelled) {
           onDone(finalText);
         }
