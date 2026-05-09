@@ -4,15 +4,21 @@ export const PROVIDER_URLS: Record<ProviderName, string> = {
   chatgpt: 'https://chatgpt.com/',
   gemini: 'https://gemini.google.com/',
   deepseek: 'https://chat.deepseek.com/',
+  qwen: 'https://chat.qwen.ai/',
+  zai: 'https://chat.z.ai/',
+  doubao: 'https://www.doubao.com/chat/',
 };
 
 export const PROVIDER_LABELS: Record<ProviderName, string> = {
   chatgpt: 'ChatGPT',
   gemini: 'Gemini',
   deepseek: 'DeepSeek',
+  qwen: 'Qwen',
+  zai: 'Z.AI',
+  doubao: 'Doubao',
 };
 
-export const ALL_PROVIDERS: ProviderName[] = ['chatgpt', 'gemini', 'deepseek'];
+export const ALL_PROVIDERS: ProviderName[] = ['chatgpt', 'gemini', 'deepseek', 'qwen', 'zai', 'doubao'];
 
 export const STREAM_THROTTLE_MS = 300;
 export const DONE_STABLE_MS = 250;

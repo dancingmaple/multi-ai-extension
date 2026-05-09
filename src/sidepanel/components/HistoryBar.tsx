@@ -8,6 +8,9 @@ const PROVIDER_INITIAL: Record<ProviderName, string> = {
   chatgpt: 'C',
   gemini: 'G',
   deepseek: 'D',
+  qwen: 'Q',
+  zai: 'Z',
+  doubao: 'B',
 };
 
 const HistoryItem: React.FC<{ entry: HistoryEntry; onDelete: () => void; onClick: () => void }> = ({

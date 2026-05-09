@@ -3,6 +3,9 @@ import type { SiteAdapter } from './adapters/base';
 import { ChatGPTAdapter } from './adapters/chatgpt';
 import { GeminiAdapter } from './adapters/gemini';
 import { DeepSeekAdapter } from './adapters/deepseek';
+import { QwenAdapter } from './adapters/qwen';
+import { ZaiAdapter } from './adapters/zai';
+import { DoubaoAdapter } from './adapters/doubao';
 import { LoginRequiredError } from '../shared/utils';
 import { SETTINGS_KEY, DEFAULT_SETTINGS } from '../shared/constants';
 
@@ -10,6 +13,9 @@ const adapters: Record<ProviderName, SiteAdapter> = {
   chatgpt: new ChatGPTAdapter(),
   gemini: new GeminiAdapter(),
   deepseek: new DeepSeekAdapter(),
+  qwen: new QwenAdapter(),
+  zai: new ZaiAdapter(),
+  doubao: new DoubaoAdapter(),
 };
 
 let cachedSettings: AppSettings | null = null;

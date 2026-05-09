@@ -1,4 +1,4 @@
-export type ProviderName = 'chatgpt' | 'gemini' | 'deepseek';
+export type ProviderName = 'chatgpt' | 'gemini' | 'deepseek' | 'qwen' | 'zai' | 'doubao';
 
 export type ProviderStatus =
   | 'idle'

@@ -10,6 +10,9 @@ export function getProviderFromUrl(url: string): ProviderName | null {
   if (hostname.includes('chatgpt.com')) return 'chatgpt';
   if (hostname.includes('gemini.google.com')) return 'gemini';
   if (hostname.includes('deepseek.com')) return 'deepseek';
+  if (hostname.includes('qwen.ai')) return 'qwen';
+  if (hostname.includes('z.ai')) return 'zai';
+  if (hostname.includes('doubao.com')) return 'doubao';
   return null;
 }
 
@@ -21,5 +24,11 @@ export function getProviderMatchPattern(provider: ProviderName): string {
       return 'https://gemini.google.com/*';
     case 'deepseek':
       return 'https://chat.deepseek.com/*';
+    case 'qwen':
+      return 'https://chat.qwen.ai/*';
+    case 'zai':
+      return 'https://chat.z.ai/*';
+    case 'doubao':
+      return 'https://www.doubao.com/*';
   }
 }

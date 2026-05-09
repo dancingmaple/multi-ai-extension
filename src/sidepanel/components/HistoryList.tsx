@@ -4,10 +4,13 @@ import type { HistoryEntry, ProviderName } from '../../shared/types';
 import { ALL_PROVIDERS } from '../../shared/constants';
 import styles from './HistoryList.module.css';
 
-const PROVIDER_LABELS: Record<ProviderName, string> = {
+const PROVIDER_LINKS: Record<ProviderName, string> = {
   chatgpt: 'ChatGPT',
   gemini: 'Gemini',
   deepseek: 'DeepSeek',
+  qwen: 'Qwen',
+  zai: 'Z.AI',
+  doubao: 'Doubao',
 };
 
 const HistoryList: React.FC = () => {
@@ -102,10 +105,10 @@ const HistoryRow: React.FC<{
               className={`${styles.provLink} ${ps.status === 'done' ? styles.provDone : styles.provError}`}
               href={ps.url}
               target="_blank"
-              title={`Open ${PROVIDER_LABELS[p]} conversation`}
+              title={`Open ${PROVIDER_LINKS[p]} conversation`}
               onClick={(e) => e.stopPropagation()}
             >
-              {PROVIDER_LABELS[p]}
+              {PROVIDER_LINKS[p]}
             </a>
           );
         })}
