@@ -5,7 +5,7 @@ const manifest: ManifestV3Export = {
   name: 'Multi AI Web Automation',
   version: '1.0.0',
   description: 'Send one prompt to 6 AI web apps and view answers side by side',
-  permissions: ['tabs', 'storage', 'scripting', 'sidePanel', 'webNavigation'],
+  permissions: ['tabs', 'storage', 'scripting', 'sidePanel', 'webNavigation', 'alarms'],
   host_permissions: [
     'https://chatgpt.com/*',
     'https://gemini.google.com/*',
@@ -15,6 +15,13 @@ const manifest: ManifestV3Export = {
     'https://chat.z.ai/*',
     'https://www.doubao.com/*',
   ],
+  externally_connectable: {
+    matches: [
+      'http://localhost/*',
+      'http://127.0.0.1/*',
+      // 'file:///*',
+    ],
+  },
   background: {
     service_worker: 'src/background/index.ts',
     type: 'module',

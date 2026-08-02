@@ -15,7 +15,7 @@ export function generateTaskId(): string {
   return `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export function sendToBackground(message: UIMessage): Promise<BackgroundToUIMessage> {
+export function sendToBackground(message: UIMessage): Promise<unknown> {
   log('sendToBackground', message.type);
   return chrome.runtime.sendMessage(message);
 }
@@ -35,9 +35,23 @@ export function sendToUI(message: BackgroundToUIMessage): void {
   });
 }
 
+// ── 广播钩子：让 externalBridge 把状态转发给外部网页（工作台） ──
+type BroadcastHook = (msg: TaskStateUpdateMessage) => void;
+const broadcastHooks: BroadcastHook[] = [];
+export function onBroadcast(hook: BroadcastHook): () => void {
+  broadcastHooks.push(hook);
+  return () => {
+    const i = broadcastHooks.indexOf(hook);
+    if (i >= 0) broadcastHooks.splice(i, 1);
+  };
+}
+
 export function broadcastTaskState(message: TaskStateUpdateMessage): void {
   log('broadcastTaskState taskId=', message.task.taskId);
   chrome.runtime.sendMessage(message).catch(() => {});
+  for (const hook of broadcastHooks) {
+    try { hook(message); } catch { /* 外部端口已断开 */ }
+  }
 }
 
 export function onUIMessage(
@@ -60,20 +74,17 @@ export function onBackgroundMessage(
     msg: BackgroundToContentMessage,
     sender: chrome.runtime.MessageSender,
     sendResponse: (response?: unknown) => void
-  ): boolean => {
+  ) => {
     log('onBackgroundMessage received', msg.type, 'from tab', sender.tab?.id);
     if (msg.type === 'PING') {
       const result = handler(msg, sender);
-      // PING expects a sync response — send it and close the channel
       if (result !== undefined && typeof result !== 'boolean') {
         sendResponse(result);
       }
-      return false; // No async response needed
+      return false;
     }
     if (msg.type === 'EXECUTE_PROMPT') {
       handler(msg, sender);
-      // Send immediate ACK and close channel — content script reports progress
-      // via separate chrome.runtime.sendMessage calls
       sendResponse({ type: 'ACK' });
       return false;
     }

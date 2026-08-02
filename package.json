@@ -22,5 +22,10 @@
     "puppeteer": "^24.43.0",
     "typescript": "^5.5.3",
     "vite": "^5.4.0"
-  }
+  },
+  
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "puppeteer"]
+  
+}
 }

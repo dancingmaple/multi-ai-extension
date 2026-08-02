@@ -3,8 +3,33 @@ import { broadcastTaskState } from '../shared/messaging';
 import { createTask, getTask, updateProviderStatus, updateProviderContent, finishProviderTask, failProviderTask, setProviderTabId, loadLastTask } from './stateStore';
 import { getOrCreateProviderTab } from './tabManager';
 
+console.log('[MultiAI:messageRouter] build=keepalive-v1 2026-08-02');
+
 const HISTORY_KEY = 'conversation_history';
 const MAX_HISTORY = 200;
+
+// 流式内容节流落盘：断线重连后可从这里恢复最新内容
+const streamWriteAt = new Map<string, number>();
+function persistStream(taskId: string, task: AskTaskState, force = false): void {
+  const now = Date.now();
+  if (!force) {
+    const last = streamWriteAt.get(taskId) || 0;
+    if (now - last < 2000) return;
+    streamWriteAt.set(taskId, now);
+  } else {
+    streamWriteAt.set(taskId, now);
+  }
+  const providers: Record<string, { content: string; status: string }> = {};
+  for (const [p, ps] of Object.entries(task.providers)) providers[p] = { content: ps.content, status: ps.status };
+  chrome.storage.local.get('studio_laststream').then((r) => {
+    const m = (r.studio_laststream || {}) as Record<string, { prompt: string; providers: Record<string, { content: string; status: string }>; updatedAt: number }>;
+    m[taskId] = { prompt: task.prompt, providers, updatedAt: now };
+    const keys = Object.keys(m).sort((a, b) => (m[b].updatedAt || 0) - (m[a].updatedAt || 0)).slice(0, 5);
+    const pruned: Record<string, unknown> = {};
+    keys.forEach((k) => (pruned[k] = m[k]));
+    chrome.storage.local.set({ studio_laststream: pruned }).catch(() => {});
+  }).catch(() => {});
+}
 
 async function saveToHistory(task: AskTaskState): Promise<void> {
   const entry: HistoryEntry = {
@@ -33,10 +58,8 @@ async function saveToHistory(task: AskTaskState): Promise<void> {
 
   const result = await chrome.storage.local.get(HISTORY_KEY);
   const history: HistoryEntry[] = result[HISTORY_KEY] || [];
-  // Remove duplicate if exists, then prepend
   const filtered = history.filter((h) => h.id !== entry.id);
   filtered.unshift(entry);
-  // Trim to max
   const trimmed = filtered.slice(0, MAX_HISTORY);
   await chrome.storage.local.set({ [HISTORY_KEY]: trimmed });
 }
@@ -52,24 +75,19 @@ const pendingMessages: Array<{ msg: Record<string, unknown>; sender: chrome.runt
 
 console.log('[MultiAI:background] Service worker starting...');
 
-// ── Register listeners SYNCHRONOUSLY at top level ──────
-// This is REQUIRED for MV3. If registered inside an async function,
-// Chrome won't recognize the listener and sendMessage will fail.
-
 chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
   const msg = rawMsg as Record<string, unknown>;
-  // Route UI messages (from side panel / popup)
+
   if (msg.type === 'ASK_ALL' || msg.type === 'GET_TASK_STATE' || msg.type === 'RETRY_PROVIDER' || msg.type === 'SWITCH_MODE') {
     if (!ready) {
       console.log('[MultiAI:background] Queuing message, not ready yet:', msg.type);
       pendingMessages.push({ msg: msg as Record<string, unknown>, sender, sendResponse });
-      return true; // keep channel open
+      return true;
     }
     handleUIMessage(msg as UIMessage, sender).then(() => sendResponse());
-    return true; // async response
+    return true;
   }
 
-  // Route content script messages
   if (
     rawMsg.type === 'PROVIDER_STATUS' ||
     rawMsg.type === 'STREAM_UPDATE' ||
@@ -88,24 +106,15 @@ chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
   return false;
 });
 
-// ── Action click handler ────────────────────────────────
-// Default: open as fullscreen tab. Can switch to side panel via toggle.
-
 chrome.action.onClicked.addListener(() => {
   openFullscreen();
 });
 
-// ── Async initialization ───────────────────────────────
-
 async function doInit(): Promise<void> {
   console.log('[MultiAI:background] Initializing...');
-
   await loadLastTask();
-
   ready = true;
   console.log('[MultiAI:background] Ready, processing', pendingMessages.length, 'pending messages');
-
-  // Process any queued messages
   for (const { msg, sender, sendResponse } of pendingMessages) {
     if (msg.type === 'ASK_ALL' || msg.type === 'GET_TASK_STATE' || msg.type === 'RETRY_PROVIDER' || msg.type === 'SWITCH_MODE') {
       await handleUIMessage(msg as UIMessage, sender);
@@ -119,13 +128,10 @@ async function doInit(): Promise<void> {
 
 doInit().catch(console.error);
 
-// ── Mode switching ──────────────────────────────────────
-
 let fullscreenTabId: number | undefined;
 
 async function openFullscreen(): Promise<void> {
   const url = chrome.runtime.getURL('public/sidepanel.html') + '?mode=fullscreen';
-  // Reuse existing tab if still open
   if (fullscreenTabId !== undefined) {
     try {
       const tab = await chrome.tabs.get(fullscreenTabId);
@@ -146,16 +152,12 @@ async function openFullscreen(): Promise<void> {
 
 async function openSidePanel(): Promise<void> {
   await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-  // Close fullscreen tab
   if (fullscreenTabId !== undefined) {
     await chrome.tabs.remove(fullscreenTabId).catch(() => {});
     fullscreenTabId = undefined;
   }
-  // Open side panel
   chrome.sidePanel.open({ windowId: -1 } as any).catch(() => {});
 }
-
-// ── Handlers ────────────────────────────────────────────
 
 async function handleUIMessage(
   msg: UIMessage,
@@ -176,12 +178,7 @@ async function handleUIMessage(
       break;
     }
     case 'RETRY_PROVIDER': {
-      const task = getTask(msg.taskId);
-      if (task) {
-        updateProviderStatus(msg.taskId, msg.provider, 'waiting');
-        broadcastTaskState({ type: 'TASK_STATE_UPDATE', task: getTask(msg.taskId)! });
-        await dispatchToProvider(msg.taskId, msg.provider, task.prompt);
-      }
+      await retryProvider(msg.taskId, msg.provider);
       break;
     }
     case 'SWITCH_MODE': {
@@ -221,14 +218,14 @@ function handleContentMessage(
 
   if (updatedTask) {
     broadcastTaskState({ type: 'TASK_STATE_UPDATE', task: updatedTask });
-    // Save to history when all providers have finished
+    persistStream(taskId, updatedTask, providersAllDone(updatedTask));
     if (providersAllDone(updatedTask)) {
       saveToHistory(updatedTask).catch(console.error);
     }
   }
 }
 
-async function handleAskAll(
+export async function handleAskAll(
   taskId: string,
   prompt: string,
   targets: ProviderName[]
@@ -244,6 +241,17 @@ async function handleAskAll(
   await Promise.allSettled(dispatches);
 }
 
+export async function retryProvider(
+  taskId: string,
+  provider: ProviderName
+): Promise<void> {
+  const task = getTask(taskId);
+  if (!task) return;
+  updateProviderStatus(taskId, provider, 'waiting');
+  broadcastTaskState({ type: 'TASK_STATE_UPDATE', task: getTask(taskId)! });
+  await dispatchToProvider(taskId, provider, task.prompt);
+}
+
 async function dispatchToProvider(
   taskId: string,
   provider: ProviderName,
@@ -254,7 +262,6 @@ async function dispatchToProvider(
     updateProviderStatus(taskId, provider, 'waiting');
     broadcastTaskState({ type: 'TASK_STATE_UPDATE', task: getTask(taskId)! });
 
-    // Always use hidden tabs for reliable automation
     const tabId = await getOrCreateProviderTab(provider);
     console.log('[MultiAI:background] Got tab', tabId, 'for', provider);
     setProviderTabId(taskId, provider, tabId);
