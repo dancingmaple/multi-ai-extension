@@ -1,14 +1,15 @@
 import type { ProviderName } from '../../shared/types';
 import { BaseAdapter } from './base';
 import { SubmitFailedError } from '../../shared/utils';
+import { extractAnswer } from '../../shared/grab';
 
 /* ============================================================
-   Z.ai 适配器 · robust-v2
+   Z.ai 适配器 · robust-v3
    修复「抓错回答」：改用笔直剪刀法（prompt-scissor）替代
    markdown-body 容器选择器。只依赖物理事实「回答在提问后」，
-   不再受历史对话/浮动提示/思考块位置影响。
+   不再受历史对话/浮动提示/思考块/页面 footer 影响。
    ============================================================ */
-console.log('[Zai:adapter] build=robust-v2 2026-08-02');
+console.log('[Zai:adapter] build=robust-v3 2026-08-02');
 
 const CONFIG = {
   INPUT_SELECTORS: [
@@ -21,13 +22,8 @@ const CONFIG = {
     'button[data-testid*="send" i]', 'button[class*="send" i]',
     'form button[type="submit"]', 'button[aria-label*="submit" i]',
   ],
-  RESPONSE_SELECTORS: ['main', 'body'],
   LOGIN_SELECTORS: ['a[href*="/login"]', 'a[href*="/signin"]'],
 
-  /* 剪刀法裁剪：思考/联网头 + 动作尾 */
-  HEAD_LINE: /^(思考了|已思考|思考中|Thought for|Thinking|Reasoned|Reasoning|搜索了|联网搜索|Searching|Searched|Found\s+\d+|阅读了|Read\s+\d+|查看了|引用了|\d+\s*个\s*(网页|来源|结果|web\s*pages?)|DeepThink|Instant|深度思考|联网搜索中|搜索中|生成中|正在思考|正在联网|正在搜索)/i,
-  TAIL_LINE: /^(复制|点赞|点踩|重新生成|再生成|分享|引用|参考来源|参考|来源|DeepThink|联网搜索|Instant|搜索|给\s*豆包|发消息|发送|Message|跳过|⎘|👍|👎|◎|↻)/i,
-  PROGRESS: /(思考中|搜索中|联网搜索中|生成中|正在搜索|正在思考|正在阅读|正在联网|Searching(?! for)|Reading\s+\d)/i,
   PLACEHOLDER_RE: /^[.…·••\s…\u2026\u00b7]*$/,
 
   HARD_STABLE: 2200, SOFT_STABLE: 6000, ABS_CAP: 9000,
@@ -49,30 +45,11 @@ function pageText(): string {
   return (document.body.innerText || document.body.textContent || '').replace(/\u00a0/g, ' ');
 }
 
-function extractAnswer(text: string, prompt: string): string {
-  const lines = text
-    .split('\n')
-    .map((s) => s.replace(/\s+$/, '').replace(/^\s+/, ''))
-    .filter((s) => s.length > 0);
-  const key = (prompt || '').replace(/\s/g, '').slice(0, 12);
-  let q = -1;
-  if (key) {
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (lines[i].replace(/\s/g, '').includes(key)) { q = i; break; }
-    }
-  }
-  if (q < 0) return '';
-  let body = lines.slice(q + 1);
-  while (body.length && CONFIG.HEAD_LINE.test(body[0])) body.shift();
-  while (body.length && CONFIG.TAIL_LINE.test(body[body.length - 1])) body.pop();
-  return body.join('\n').trim();
-}
-
 export class ZaiAdapter extends BaseAdapter {
   readonly provider: ProviderName = 'zai';
   readonly inputSelectors = CONFIG.INPUT_SELECTORS;
   readonly submitSelectors = CONFIG.SUBMIT_SELECTORS;
-  readonly responseSelectors = CONFIG.RESPONSE_SELECTORS;
+  readonly responseSelectors = ['main', 'body'];
   readonly loginSelectors = CONFIG.LOGIN_SELECTORS;
 
   private lastPrompt = '';
@@ -122,27 +99,28 @@ export class ZaiAdapter extends BaseAdapter {
       const now = Date.now();
       const text = pageText();
       if (!started && text.length > gateLen + 12) { started = true; log('GATE OPEN len', text.length, '>', gateLen); }
-      const real = started ? extractAnswer(text, prompt) : '';
+      const extracted = started ? extractAnswer(text, prompt) : { text: '', method: 'none' };
+      const real = extracted.text;
       const isPlaceholder = !real || CONFIG.PLACEHOLDER_RE.test(real);
       const body = isPlaceholder ? '' : real;
       const show = body || (started ? CONFIG.THINKING_PLACEHOLDER : '');
       if (show && show !== lastSent && now - lastEmit >= CONFIG.STREAM_THROTTLE_MS) { lastSent = show; lastEmit = now; onUpdate(show); }
       if (body) { if (body !== lastReal) { lastReal = body; stableSince = now; } } else { lastReal = ''; stableSince = 0; }
-      const hasProgress = CONFIG.PROGRESS.test(body);
+      const hasProgress = /(思考中|搜索中|联网搜索中|生成中|正在搜索|正在思考|正在阅读|正在联网|Searching(?! for)|Reading\s+\d)/i.test(body);
       const elapsed = body ? now - stableSince : 0;
       const need = hasProgress ? CONFIG.SOFT_STABLE : CONFIG.HARD_STABLE;
       const done = !!body && body === lastReal && (elapsed >= need || elapsed >= CONFIG.ABS_CAP);
       log('tick', { started, bodyLen: body.length, hasProgress, stableMs: elapsed, need, done });
       if (done) {
         stopped = true;
-        const final = extractAnswer(pageText(), prompt) || body;
+        const final = extractAnswer(pageText(), prompt).text || body;
         log('DONE finalLen=', final.length);
         onUpdate(final); onDone(final); cleanup();
         return;
       }
       if (now - t0 >= maxWait) {
         stopped = true; cleanup();
-        const final = extractAnswer(pageText(), prompt);
+        const final = extractAnswer(pageText(), prompt).text;
         if (final && !CONFIG.PLACEHOLDER_RE.test(final)) { log('HARD_TIMEOUT 有正文'); onDone(final); }
         else { log('HARD_TIMEOUT 无正文'); onError(new Error('StreamTimeoutError')); }
       }

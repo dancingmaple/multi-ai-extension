@@ -1,6 +1,21 @@
 import { BaseAdapter } from './base';
 import type { ProviderName } from '../../shared/types';
 import { SubmitFailedError, sleep } from '../../shared/utils';
+import { extractAnswer } from '../../shared/grab';
+
+const STREAM_CONFIG = {
+  HARD_STABLE: 2200,
+  SOFT_STABLE: 6000,
+  ABS_CAP: 9000,
+  THINKING_PLACEHOLDER: '⏳ 思考 / 联网检索中…',
+  STREAM_THROTTLE_MS: 250,
+  POLL_MS: 400,
+  PLACEHOLDER_RE: /^[.…·••\s…\u2026\u00b7]*$/,
+};
+
+function pageText(): string {
+  return (document.body.innerText || document.body.textContent || '').replace(/\u00a0/g, ' ');
+}
 
 export class GeminiAdapter extends BaseAdapter {
   readonly provider: ProviderName = 'gemini';
@@ -75,12 +90,18 @@ export class GeminiAdapter extends BaseAdapter {
     el.dispatchEvent(new KeyboardEvent('keyup', init));
   }
 
+  private lastPrompt = '';
+  private preSendLen = 0;
+
   override async waitForReady(timeoutMs?: number): Promise<void> {
     await super.waitForReady(timeoutMs);
     await sleep(1500);
   }
 
   override async setPrompt(prompt: string): Promise<void> {
+    this.lastPrompt = prompt;
+    this.preSendLen = pageText().length;
+
     const el = this.findInput();
     if (!el) throw new SubmitFailedError(this.provider, '找不到可见输入框');
 
@@ -130,5 +151,54 @@ export class GeminiAdapter extends BaseAdapter {
     }
 
     throw new SubmitFailedError(this.provider, '无可用发送按钮且找不到输入框');
+  }
+
+  override startStreaming(onUpdate: (t: string) => void, onDone: (t: string) => void, onError: (e: Error) => void): () => void {
+    let stopped = false;
+    const prompt = this.lastPrompt;
+    const gateLen = this.preSendLen;
+    let started = false;
+    let lastReal = '';
+    let stableSince = 0;
+    let lastEmit = 0;
+    let lastSent = '';
+    const maxWait = this.getResponseMaxWait();
+    const t0 = Date.now();
+
+    const tick = () => {
+      if (stopped) return;
+      const now = Date.now();
+      const text = pageText();
+      if (!started && text.length > gateLen + 12) { started = true; }
+      const extracted = started ? extractAnswer(text, prompt) : { text: '', method: 'none' };
+      const real = extracted.text;
+      const isPlaceholder = !real || STREAM_CONFIG.PLACEHOLDER_RE.test(real);
+      const body = isPlaceholder ? '' : real;
+      const show = body || (started ? STREAM_CONFIG.THINKING_PLACEHOLDER : '');
+      if (show && show !== lastSent && now - lastEmit >= STREAM_CONFIG.STREAM_THROTTLE_MS) { lastSent = show; lastEmit = now; onUpdate(show); }
+      if (body) { if (body !== lastReal) { lastReal = body; stableSince = now; } } else { lastReal = ''; stableSince = 0; }
+      const hasProgress = /(思考中|搜索中|联网搜索中|生成中|正在搜索|正在思考|正在阅读|正在联网|Searching(?! for)|Reading\s+\d)/i.test(body);
+      const elapsed = body ? now - stableSince : 0;
+      const need = hasProgress ? STREAM_CONFIG.SOFT_STABLE : STREAM_CONFIG.HARD_STABLE;
+      const done = !!body && body === lastReal && (elapsed >= need || elapsed >= STREAM_CONFIG.ABS_CAP);
+      if (done) {
+        stopped = true;
+        const final = extractAnswer(pageText(), prompt).text || body;
+        onUpdate(final); onDone(final); cleanup();
+        return;
+      }
+      if (now - t0 >= maxWait) {
+        stopped = true; cleanup();
+        const final = extractAnswer(pageText(), prompt).text;
+        if (final && !STREAM_CONFIG.PLACEHOLDER_RE.test(final)) { onDone(final); }
+        else { onError(new Error('StreamTimeoutError')); }
+      }
+    };
+
+    const mo = new MutationObserver(() => { if (!stopped) tick(); });
+    mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+    const poll = window.setInterval(tick, STREAM_CONFIG.POLL_MS);
+    function cleanup() { mo.disconnect(); clearInterval(poll); }
+    tick(); return cleanup;
   }
 }
