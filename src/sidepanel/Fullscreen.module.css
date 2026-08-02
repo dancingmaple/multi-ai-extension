@@ -288,3 +288,20 @@
   z-index: 60;
 }
 .emptyCenter { color: var(--muted); text-align: center; margin: auto; max-width: 420px; line-height: 1.8; }
+
+/* 浅色主题（data-theme='light' 时覆盖 jade 变量，保持玉绿风格但更明亮） */
+:global([data-theme='light']) .root {
+  --bg: #f4f8f5;
+  --panel: #ffffff;
+  --panel2: #eef4f0;
+  --panel3: #e6efe9;
+  --line: rgba(20, 40, 30, 0.1);
+  --line2: rgba(20, 40, 30, 0.18);
+  --ink: #1f2a24;
+  --ink2: #33473b;
+  --muted: #6f8779;
+  --gold: #b5832f;
+  --coral: #c85a44;
+  --jade: #2f9e6a;
+  --blue: #3f7fb0;
+}

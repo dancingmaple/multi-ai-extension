@@ -6,6 +6,8 @@ const ResponseView: React.FC = () => {
   const task = useStore((s) => s.task);
   const activeTab = useStore((s) => s.activeTab);
   const retryProvider = useStore((s) => s.retryProvider);
+  const selectedProviders = useStore((s) => s.selectedProviders);
+  const openReader = useStore((s) => s.openReader);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const providerState = task?.providers[activeTab];
@@ -21,6 +23,11 @@ const ResponseView: React.FC = () => {
 
   const handleCopy = () => {
     navigator.clipboard.writeText(content).catch(console.error);
+  };
+
+  const handleRead = () => {
+    const idx = selectedProviders.indexOf(activeTab);
+    openReader(selectedProviders, idx < 0 ? 0 : idx);
   };
 
   if (status === 'error' || status === 'login_required') {
@@ -49,6 +56,9 @@ const ResponseView: React.FC = () => {
       <div className={styles.toolbar}>
         <button className={styles.copyBtn} onClick={handleCopy} disabled={!content}>
           Copy
+        </button>
+        <button className={styles.readBtn} onClick={handleRead} disabled={!content} title="大弹窗阅读">
+          展开阅读 ⤢
         </button>
       </div>
       <div ref={containerRef} className={styles.content}>

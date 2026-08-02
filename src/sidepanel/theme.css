@@ -1,0 +1,45 @@
+/* 全局主题变量：sidepanel 与阅读弹窗共用。
+   切换逻辑：document.documentElement.dataset.theme = 'light' | 'dark'。
+   'auto' 在 App 中按 prefers-color-scheme 解析为 light/dark。 */
+
+:root {
+  --bg: #ffffff;
+  --surface: #f7f8fa;
+  --surface-2: #ffffff;
+  --text: #1f2328;
+  --text-dim: #6b7280;
+  --muted: #9ca3af;
+  --border: #e5e7eb;
+  --border-strong: #d1d5db;
+  --accent: #4f46e5;
+  --accent-weak: rgba(79, 70, 229, 0.1);
+  --code-bg: #f3f4f6;
+  --code-text: #b5179e;
+  --pre-bg: #f6f8fa;
+  --shadow: 0 10px 40px rgba(15, 23, 42, 0.12);
+  --shadow-sm: 0 4px 14px rgba(15, 23, 42, 0.1);
+  --danger: #ef4444;
+  --danger-weak: rgba(239, 68, 68, 0.12);
+  --success: #16a34a;
+}
+
+:root[data-theme='dark'] {
+  --bg: #0f1419;
+  --surface: #161b22;
+  --surface-2: #1c232c;
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+  --muted: #6e7681;
+  --border: #30363d;
+  --border-strong: #3d444d;
+  --accent: #7c8cff;
+  --accent-weak: rgba(124, 140, 255, 0.14);
+  --code-bg: #21262d;
+  --code-text: #ff7b9c;
+  --pre-bg: #0d1117;
+  --shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
+  --shadow-sm: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --danger: #f87171;
+  --danger-weak: rgba(248, 113, 113, 0.16);
+  --success: #3fb950;
+}

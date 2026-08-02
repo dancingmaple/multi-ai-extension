@@ -1,9 +1,14 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useStore } from './store';
 import { PromptInput, StatusBar, HistoryBar, HistoryList, SettingsPanel, ProviderTabs, ResponseView } from './components';
+import AnswerModal from './components/AnswerModal';
 import Fullscreen from './Fullscreen';
 import type { BackgroundToUIMessage, ExportLayout, ExportSink } from '../shared/types';
 import styles from './App.module.css';
+import './theme.css';
+
+const THEME_ICON: Record<string, string> = { light: '☀', dark: '🌙', auto: '🌗' };
+const THEME_ORDER = ['light', 'dark', 'auto'] as const;
 
 const App: React.FC = () => {
   const setTask = useStore((s) => s.setTask);
@@ -18,6 +23,8 @@ const App: React.FC = () => {
   const setConversation = useStore((s) => s.setConversation);
   const setConversations = useStore((s) => s.setConversations);
   const exportMd = useStore((s) => s.exportMd);
+  const theme = useStore((s) => s.theme);
+  const setTheme = useStore((s) => s.setTheme);
   const [exportOpen, setExportOpen] = useState(false);
   const exportRef = useRef<HTMLDivElement>(null);
 
@@ -34,10 +41,37 @@ const App: React.FC = () => {
     exportMd(layout, sink).catch(() => {});
   };
 
+  const cycleTheme = () => {
+    const idx = THEME_ORDER.indexOf(theme);
+    setTheme(THEME_ORDER[(idx + 1) % THEME_ORDER.length]);
+  };
+
+  // 应用主题：auto 跟随系统配色
+  useEffect(() => {
+    const apply = () => {
+      const resolved = theme === 'auto'
+        ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        : theme;
+      document.documentElement.dataset.theme = resolved;
+    };
+    apply();
+    if (theme === 'auto') {
+      const mq = window.matchMedia('(prefers-color-scheme: dark)');
+      mq.addEventListener('change', apply);
+      return () => mq.removeEventListener('change', apply);
+    }
+  }, [theme]);
+
   useEffect(() => {
     restoreLastTask();
     loadHistory();
     loadSettings();
+    // 读取已保存的主题
+    chrome.storage.local.get('theme').then((r: { theme?: string }) => {
+      if (r.theme === 'light' || r.theme === 'dark' || r.theme === 'auto') {
+        useStore.setState({ theme: r.theme });
+      }
+    });
     // 全页面模式打开时拉取当前会话
     if (panelMode === 'fullscreen') {
       useStore.getState().listConversationsAction().catch(() => {});
@@ -83,6 +117,13 @@ const App: React.FC = () => {
           <div className={styles.header}>
             <span className={styles.title}>Multi AI</span>
             <div className={styles.headerActions}>
+              <button
+                className={styles.iconBtn}
+                onClick={cycleTheme}
+                title={`主题：${theme === 'light' ? '浅色' : theme === 'dark' ? '深色' : '跟随系统'}`}
+              >
+                {THEME_ICON[theme]}
+              </button>
               <div className={styles.exportWrap} ref={exportRef}>
                 <button
                   className={styles.iconBtn}
@@ -131,6 +172,7 @@ const App: React.FC = () => {
           {showSettings && <SettingsPanel />}
         </>
       )}
+      <AnswerModal />
     </div>
   );
 };

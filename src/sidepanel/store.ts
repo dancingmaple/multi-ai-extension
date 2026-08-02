@@ -43,6 +43,14 @@ interface PanelState {
   selectedTurnId: string | undefined;
   conversations: Conversation[];
   toast: string | undefined;
+  // ── 主题（网页风格切换） ──
+  theme: 'light' | 'dark' | 'auto';
+  setTheme: (t: 'light' | 'dark' | 'auto') => void;
+  // ── 大弹窗阅读器 ──
+  reader: { open: boolean; providers: ProviderName[]; index: number; turnId?: string };
+  openReader: (providers: ProviderName[], index: number, turnId?: string) => void;
+  closeReader: () => void;
+  switchReader: (dir: 1 | -1) => void;
 
   setPrompt: (prompt: string) => void;
   toggleProvider: (provider: ProviderName) => void;
@@ -96,6 +104,8 @@ export const useStore = create<PanelState>((set, get) => ({
   selectedTurnId: undefined,
   conversations: [],
   toast: undefined,
+  theme: 'light',
+  reader: { open: false, providers: [], index: 0 },
 
   setPrompt: (prompt) => set({ prompt }),
 
@@ -364,4 +374,21 @@ export const useStore = create<PanelState>((set, get) => ({
     set({ toast: res?.ok ? '已导出 Markdown' : `导出失败：${res?.error ?? ''}` });
     setTimeout(() => set({ toast: undefined }), 2600);
   },
+
+  setTheme: (t) => {
+    set({ theme: t });
+    chrome.storage.local.set({ theme: t }).catch(() => {});
+  },
+
+  openReader: (providers, index, turnId) => set({ reader: { open: true, providers, index, turnId } }),
+
+  closeReader: () => set((s) => ({ reader: { ...s.reader, open: false } })),
+
+  switchReader: (dir) =>
+    set((s) => {
+      const n = s.reader.providers.length;
+      if (n === 0) return {};
+      const index = (s.reader.index + dir + n) % n;
+      return { reader: { ...s.reader, index } };
+    }),
 }));

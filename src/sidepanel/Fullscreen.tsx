@@ -18,7 +18,8 @@ const ProviderCard: React.FC<{
   onCopy: () => void;
   onManual: () => void;
   onRetry: () => void;
-}> = ({ provider, content, status, answer, onCopy, onManual, onRetry }) => {
+  onRead: () => void;
+}> = ({ provider, content, status, answer, onCopy, onManual, onRetry, onRead }) => {
   const isStreaming = status === 'streaming' || status === 'sending' || status === 'waiting';
   const isError = status === 'error' || status === 'login_required';
   return (
@@ -41,6 +42,9 @@ const ProviderCard: React.FC<{
         <button className={styles.miniBtn} onClick={onCopy} disabled={!content}>
           复制
         </button>
+        <button className={styles.miniBtn} onClick={onRead} disabled={!content}>
+          阅读 ⤢
+        </button>
         {answer?.source === 'manual' && <span className={styles.tagManual}>手动补录</span>}
         {isError && (
           <button className={styles.miniBtn} onClick={onRetry}>
@@ -56,6 +60,9 @@ const ProviderCard: React.FC<{
     </div>
   );
 };
+
+const THEME_ICON: Record<string, string> = { light: '☀', dark: '🌙', auto: '🌗' };
+const THEME_ORDER = ['light', 'dark', 'auto'] as const;
 
 const Fullscreen: React.FC = () => {
   const conversation = useStore((s) => s.conversation);
@@ -81,6 +88,9 @@ const Fullscreen: React.FC = () => {
   const exportMd = useStore((s) => s.exportMd);
   const switchPanelMode = useStore((s) => s.switchPanelMode);
   const listConversationsAction = useStore((s) => s.listConversationsAction);
+  const theme = useStore((s) => s.theme);
+  const setTheme = useStore((s) => s.setTheme);
+  const openReader = useStore((s) => s.openReader);
 
   const [drawer, setDrawer] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
@@ -139,6 +149,13 @@ const Fullscreen: React.FC = () => {
         </button>
         <button className={styles.iconBtn} onClick={() => newConversation()} title="新会话">
           ＋
+        </button>
+        <button
+          className={styles.iconBtn}
+          onClick={() => setTheme(THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length])}
+          title={`主题：${theme === 'light' ? '浅色' : theme === 'dark' ? '深色' : '跟随系统'}`}
+        >
+          {THEME_ICON[theme]}
         </button>
         <button className={styles.iconBtn} onClick={() => switchPanelMode()} title="回到侧边栏">
           ◧
@@ -199,6 +216,7 @@ const Fullscreen: React.FC = () => {
                       onCopy={() => navigator.clipboard.writeText(content).catch(() => {})}
                       onManual={() => manualGrabProvider(p)}
                       onRetry={() => retryProvider(p)}
+                      onRead={() => openReader(columns, columns.indexOf(p), turn?.id)}
                     />
                   );
                 })}
