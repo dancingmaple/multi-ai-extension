@@ -1,9 +1,41 @@
-import type { UIMessage, AskTaskState, ProviderName, ProviderStatus, HistoryEntry } from '../shared/types';
+import type {
+  UIMessage,
+  AskTaskState,
+  ProviderName,
+  ProviderStatus,
+  HistoryEntry,
+  ExportMarkdownMessage,
+} from '../shared/types';
 import { broadcastTaskState } from '../shared/messaging';
-import { createTask, getTask, updateProviderStatus, updateProviderContent, finishProviderTask, failProviderTask, setProviderTabId, loadLastTask } from './stateStore';
+import {
+  createTask,
+  getTask,
+  updateProviderStatus,
+  updateProviderContent,
+  finishProviderTask,
+  failProviderTask,
+  setProviderTabId,
+  loadLastTask,
+} from './stateStore';
 import { getOrCreateProviderTab } from './tabManager';
+import {
+  getConversationIdForTask,
+  ensureConversationForTask,
+  getConversation,
+  appendTurn,
+  sedimentTask,
+  getCurrentConversationId,
+  getOrCreateConversation,
+  listConversations,
+  renameConversation,
+  deleteConversation,
+  loadConversations,
+} from './conversationStore';
+import { manualGrab, manualGrabAll } from './manualGrab';
+import { buildMarkdown, fileNameFor } from '../shared/exportMarkdown';
+import { ALL_PROVIDERS } from '../shared/constants';
 
-console.log('[MultiAI:messageRouter] build=keepalive-v1 2026-08-02');
+console.log('[MultiAI:messageRouter] build=spec-v2 2026-08-02');
 
 const HISTORY_KEY = 'conversation_history';
 const MAX_HISTORY = 200;
@@ -22,9 +54,14 @@ function persistStream(taskId: string, task: AskTaskState, force = false): void 
   const providers: Record<string, { content: string; status: string }> = {};
   for (const [p, ps] of Object.entries(task.providers)) providers[p] = { content: ps.content, status: ps.status };
   chrome.storage.local.get('studio_laststream').then((r) => {
-    const m = (r.studio_laststream || {}) as Record<string, { prompt: string; providers: Record<string, { content: string; status: string }>; updatedAt: number }>;
+    const m = (r.studio_laststream || {}) as Record<
+      string,
+      { prompt: string; providers: Record<string, { content: string; status: string }>; updatedAt: number }
+    >;
     m[taskId] = { prompt: task.prompt, providers, updatedAt: now };
-    const keys = Object.keys(m).sort((a, b) => (m[b].updatedAt || 0) - (m[a].updatedAt || 0)).slice(0, 5);
+    const keys = Object.keys(m)
+      .sort((a, b) => (m[b].updatedAt || 0) - (m[a].updatedAt || 0))
+      .slice(0, 5);
     const pruned: Record<string, unknown> = {};
     keys.forEach((k) => (pruned[k] = m[k]));
     chrome.storage.local.set({ studio_laststream: pruned }).catch(() => {});
@@ -71,29 +108,58 @@ function providersAllDone(task: AskTaskState): boolean {
 }
 
 let ready = false;
-const pendingMessages: Array<{ msg: Record<string, unknown>; sender: chrome.runtime.MessageSender; sendResponse: (r?: unknown) => void }> = [];
+const pendingMessages: Array<{
+  msg: Record<string, unknown>;
+  sender: chrome.runtime.MessageSender;
+  sendResponse: (r?: unknown) => void;
+}> = [];
 
-console.log('[MultiAI:background] Service worker starting...');
+const UI_TYPES = new Set([
+  'ASK_ALL',
+  'GET_TASK_STATE',
+  'RETRY_PROVIDER',
+  'SWITCH_MODE',
+  'NEW_CONVERSATION',
+  'APPEND_TURN',
+  'GET_CONVERSATION',
+  'LIST_CONVERSATIONS',
+  'RENAME_CONVERSATION',
+  'DELETE_CONVERSATION',
+  'MANUAL_GRAB',
+  'MANUAL_GRAB_ALL',
+  'EXPORT_MARKDOWN',
+  'RESUME',
+  'KA',
+]);
+const CONTENT_TYPES = new Set(['PROVIDER_STATUS', 'STREAM_UPDATE', 'TASK_DONE', 'TASK_ERROR']);
+
+// 双形态入口（§4）：工具栏点击默认打开「侧边栏」；
+// 「全屏页」由侧边栏内的 ⛶ 按钮（SWITCH_MODE target=fullscreen）打开。
+// 注意：openPanelOnActionClick=true 与 action.onClicked 互斥，后者不会触发。
+chrome.action.onClicked.addListener(() => {
+  chrome.sidePanel
+    .setPanelBehavior({ openPanelOnActionClick: true })
+    .then(() => chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT }))
+    .catch(() => {});
+});
 
 chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
   const msg = rawMsg as Record<string, unknown>;
+  const type = msg.type as string;
 
-  if (msg.type === 'ASK_ALL' || msg.type === 'GET_TASK_STATE' || msg.type === 'RETRY_PROVIDER' || msg.type === 'SWITCH_MODE') {
+  if (UI_TYPES.has(type)) {
     if (!ready) {
-      console.log('[MultiAI:background] Queuing message, not ready yet:', msg.type);
-      pendingMessages.push({ msg: msg as Record<string, unknown>, sender, sendResponse });
+      console.log('[MultiAI:background] Queuing UI message, not ready yet:', type);
+      pendingMessages.push({ msg, sender, sendResponse });
       return true;
     }
-    handleUIMessage(msg as UIMessage, sender).then(() => sendResponse());
+    handleUIMessage(msg as UIMessage, sender)
+      .then((resp) => sendResponse(resp))
+      .catch(() => sendResponse());
     return true;
   }
 
-  if (
-    rawMsg.type === 'PROVIDER_STATUS' ||
-    rawMsg.type === 'STREAM_UPDATE' ||
-    rawMsg.type === 'TASK_DONE' ||
-    rawMsg.type === 'TASK_ERROR'
-  ) {
+  if (CONTENT_TYPES.has(type)) {
     if (!ready) {
       pendingMessages.push({ msg: rawMsg as Record<string, unknown>, sender, sendResponse });
       return true;
@@ -106,20 +172,21 @@ chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
   return false;
 });
 
-chrome.action.onClicked.addListener(() => {
-  openFullscreen();
-});
-
 async function doInit(): Promise<void> {
   console.log('[MultiAI:background] Initializing...');
   await loadLastTask();
+  await loadConversations().catch(() => {});
+  // 工具栏点击默认打开侧边栏（§4 双形态入口）
+  await chrome.sidePanel
+    .setPanelBehavior({ openPanelOnActionClick: true })
+    .catch(() => {});
   ready = true;
   console.log('[MultiAI:background] Ready, processing', pendingMessages.length, 'pending messages');
   for (const { msg, sender, sendResponse } of pendingMessages) {
-    if (msg.type === 'ASK_ALL' || msg.type === 'GET_TASK_STATE' || msg.type === 'RETRY_PROVIDER' || msg.type === 'SWITCH_MODE') {
-      await handleUIMessage(msg as UIMessage, sender);
-    } else {
+    if (msg.type && CONTENT_TYPES.has(msg.type as string)) {
       handleContentMessage(msg as Record<string, unknown>);
+    } else {
+      await handleUIMessage(msg as UIMessage, sender).catch(() => {});
     }
     sendResponse();
   }
@@ -152,49 +219,109 @@ async function openFullscreen(): Promise<void> {
 
 async function openSidePanel(): Promise<void> {
   await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  let windowId: number | undefined;
   if (fullscreenTabId !== undefined) {
-    await chrome.tabs.remove(fullscreenTabId).catch(() => {});
+    try {
+      const tab = await chrome.tabs.get(fullscreenTabId);
+      windowId = tab.windowId;
+      await chrome.tabs.remove(fullscreenTabId).catch(() => {});
+    } catch {
+      /* fullscreen tab 已关闭 */
+    }
     fullscreenTabId = undefined;
   }
-  chrome.sidePanel.open({ windowId: -1 } as any).catch(() => {});
+  if (windowId === undefined) {
+    const w = await chrome.windows.getCurrent().catch(() => undefined);
+    windowId = w?.id;
+  }
+  if (windowId !== undefined) {
+    chrome.sidePanel.open({ windowId }).catch(() => {});
+  }
 }
 
-async function handleUIMessage(
+export async function handleUIMessage(
   msg: UIMessage,
   _sender: chrome.runtime.MessageSender
-): Promise<void> {
+): Promise<unknown> {
   console.log('[MultiAI:background] handleUIMessage', msg.type);
   switch (msg.type) {
     case 'ASK_ALL': {
-      console.log('[MultiAI:background] ASK_ALL taskId=', msg.taskId, 'targets=', msg.targets);
       await handleAskAll(msg.taskId, msg.prompt, msg.targets);
-      break;
+      return undefined;
     }
     case 'GET_TASK_STATE': {
       const task = getTask(msg.taskId);
-      if (task) {
-        broadcastTaskState({ type: 'TASK_STATE_UPDATE', task });
-      }
-      break;
+      if (task) broadcastTaskState({ type: 'TASK_STATE_UPDATE', task });
+      return undefined;
     }
     case 'RETRY_PROVIDER': {
       await retryProvider(msg.taskId, msg.provider);
-      break;
+      return undefined;
     }
     case 'SWITCH_MODE': {
-      if (msg.target === 'fullscreen') {
-        await openFullscreen();
-      } else {
-        await openSidePanel();
-      }
-      break;
+      if (msg.target === 'fullscreen') await openFullscreen();
+      else await openSidePanel();
+      return undefined;
     }
+    case 'NEW_CONVERSATION': {
+      const conv = await getOrCreateConversation(msg.conversationId, msg.title || '新对话');
+      return { type: 'CONVERSATION_UPDATE', conversation: conv };
+    }
+    case 'APPEND_TURN': {
+      await appendTurn(msg.conversationId, {
+        id: msg.turnId,
+        prompt: msg.prompt,
+        targets: msg.targets,
+      });
+      await handleAskAll(msg.turnId, msg.prompt, msg.targets, msg.conversationId);
+      return undefined;
+    }
+    case 'GET_CONVERSATION': {
+      const id = msg.conversationId ?? getCurrentConversationId();
+      const conv = id ? getConversation(id) : undefined;
+      return { type: 'CONVERSATION_UPDATE', conversation: conv ?? null };
+    }
+    case 'LIST_CONVERSATIONS': {
+      const list = await listConversations();
+      return { type: 'CONVERSATION_LIST', conversations: list };
+    }
+    case 'RENAME_CONVERSATION': {
+      await renameConversation(msg.conversationId, msg.title);
+      return { type: 'CONVERSATION_UPDATE', conversation: getConversation(msg.conversationId) ?? null };
+    }
+    case 'DELETE_CONVERSATION': {
+      await deleteConversation(msg.conversationId);
+      return { type: 'CONVERSATION_UPDATE', conversation: null };
+    }
+    case 'MANUAL_GRAB': {
+      const out = await manualGrab(msg.conversationId, msg.turnId, msg.provider, msg.prompt);
+      return { type: 'GRAB_RESULT', ...out };
+    }
+    case 'MANUAL_GRAB_ALL': {
+      const conv = getConversation(msg.conversationId);
+      const turn = conv?.turns.find((t) => t.id === msg.turnId);
+      const pending = ALL_PROVIDERS.filter((p) => {
+        const a = turn?.answers[p];
+        return !a || a.status !== 'done';
+      });
+      const outs = await manualGrabAll(msg.conversationId, msg.turnId, msg.prompt, pending);
+      return {
+        type: 'GRAB_RESULT',
+        provider: pending[0] ?? 'chatgpt',
+        ok: outs.length > 0 && outs.every((o) => o.ok),
+      };
+    }
+    case 'EXPORT_MARKDOWN': {
+      return await triggerExport(msg);
+    }
+    case 'RESUME':
+    case 'KA':
+    default:
+      return undefined;
   }
 }
 
-function handleContentMessage(
-  msg: Record<string, unknown>
-): void {
+function handleContentMessage(msg: Record<string, unknown>): void {
   const taskId = msg.taskId as string;
   const provider = msg.provider as ProviderName;
   console.log('[MultiAI:background] handleContentMessage', msg.type, 'taskId=', taskId, 'provider=', provider);
@@ -221,6 +348,8 @@ function handleContentMessage(
     persistStream(taskId, updatedTask, providersAllDone(updatedTask));
     if (providersAllDone(updatedTask)) {
       saveToHistory(updatedTask).catch(console.error);
+      // 沉淀进多轮会话（§2 双态分离）：一轮全部 settle → 写进 Turn
+      sedimentTask(taskId, updatedTask);
     }
   }
 }
@@ -228,8 +357,17 @@ function handleContentMessage(
 export async function handleAskAll(
   taskId: string,
   prompt: string,
-  targets: ProviderName[]
+  targets: ProviderName[],
+  convId?: string
 ): Promise<void> {
+  let cid = convId ?? getConversationIdForTask(taskId);
+  if (!cid) cid = await ensureConversationForTask(taskId);
+
+  const conv = getConversation(cid);
+  if (!conv || !conv.turns.find((t) => t.id === taskId)) {
+    await appendTurn(cid, { id: taskId, prompt, targets });
+  }
+
   let task = getTask(taskId);
   if (!task) {
     task = createTask(taskId, prompt, targets);
@@ -241,10 +379,7 @@ export async function handleAskAll(
   await Promise.allSettled(dispatches);
 }
 
-export async function retryProvider(
-  taskId: string,
-  provider: ProviderName
-): Promise<void> {
+export async function retryProvider(taskId: string, provider: ProviderName): Promise<void> {
   const task = getTask(taskId);
   if (!task) return;
   updateProviderStatus(taskId, provider, 'waiting');
@@ -252,11 +387,7 @@ export async function retryProvider(
   await dispatchToProvider(taskId, provider, task.prompt);
 }
 
-async function dispatchToProvider(
-  taskId: string,
-  provider: ProviderName,
-  prompt: string
-): Promise<void> {
+async function dispatchToProvider(taskId: string, provider: ProviderName, prompt: string): Promise<void> {
   console.log('[MultiAI:background] dispatchToProvider', provider);
   try {
     updateProviderStatus(taskId, provider, 'waiting');
@@ -284,4 +415,37 @@ async function dispatchToProvider(
     failProviderTask(taskId, provider, message);
     broadcastTaskState({ type: 'TASK_STATE_UPDATE', task: getTask(taskId)! });
   }
+}
+
+export async function triggerExport(msg: ExportMarkdownMessage): Promise<{ type: 'EXPORT_RESULT'; ok: boolean; sink?: string; bytes?: number; error?: string }> {
+  const conv = getConversation(msg.conversationId);
+  if (!conv) return { type: 'EXPORT_RESULT', ok: false, error: '会话不存在' };
+  const md = buildMarkdown(conv, { layout: msg.layout, providers: msg.providers });
+  const fname = fileNameFor(conv);
+  const bytes = new TextEncoder().encode(md).length;
+
+  let clipOk = true;
+  let dlOk = true;
+  let error: string | undefined;
+
+  if (msg.sink === 'clipboard' || msg.sink === 'both') {
+    try {
+      await navigator.clipboard.writeText(md);
+    } catch (e) {
+      clipOk = false;
+      error = '剪贴板写入失败：' + (e instanceof Error ? e.message : String(e));
+    }
+  }
+  if (msg.sink === 'download' || msg.sink === 'both') {
+    try {
+      const url = 'data:text/markdown;charset=utf-8,' + encodeURIComponent(md);
+      await chrome.downloads.download({ url, filename: fname, saveAs: true });
+    } catch (e) {
+      dlOk = false;
+      error = (error ? error + '；' : '') + '下载失败：' + (e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  const ok = (msg.sink === 'clipboard' ? clipOk : true) && (msg.sink === 'download' ? dlOk : true);
+  return { type: 'EXPORT_RESULT', ok, sink: msg.sink, bytes, error };
 }

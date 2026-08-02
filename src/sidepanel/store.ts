@@ -1,5 +1,13 @@
 import { create } from 'zustand';
-import type { ProviderName, AskTaskState, HistoryEntry, AppSettings } from '../shared/types';
+import type {
+  ProviderName,
+  AskTaskState,
+  HistoryEntry,
+  AppSettings,
+  Conversation,
+  ExportLayout,
+  ExportSink,
+} from '../shared/types';
 import { ALL_PROVIDERS, SETTINGS_KEY, DEFAULT_SETTINGS } from '../shared/constants';
 import { sendToBackground, generateTaskId } from '../shared/messaging';
 
@@ -29,6 +37,12 @@ interface PanelState {
   historySearch: string;
   settings: AppSettings;
   showSettings: boolean;
+  // ── 多轮会话（§2） ──
+  conversationId: string | undefined;
+  conversation: Conversation | undefined;
+  selectedTurnId: string | undefined;
+  conversations: Conversation[];
+  toast: string | undefined;
 
   setPrompt: (prompt: string) => void;
   toggleProvider: (provider: ProviderName) => void;
@@ -46,6 +60,21 @@ interface PanelState {
   loadSettings: () => Promise<void>;
   saveSettings: (settings: AppSettings) => Promise<void>;
   setShowSettings: (show: boolean) => void;
+  // ── 多轮动作 ──
+  setConversation: (c: Conversation | null) => void;
+  setConversations: (list: Conversation[]) => void;
+  setToast: (msg?: string) => void;
+  newConversation: () => Promise<void>;
+  openConversation: (id: string) => Promise<void>;
+  openCurrentConversation: () => Promise<void>;
+  listConversationsAction: () => Promise<void>;
+  renameCurrent: (title: string) => Promise<void>;
+  deleteCurrent: (id: string) => Promise<void>;
+  selectTurn: (id: string) => void;
+  sendTurn: (prompt: string, targets: ProviderName[]) => Promise<void>;
+  manualGrabProvider: (provider: ProviderName) => Promise<void>;
+  manualGrabAllTurn: () => Promise<void>;
+  exportMd: (layout: ExportLayout, sink: ExportSink, providers?: ProviderName[]) => Promise<void>;
 }
 
 export const useStore = create<PanelState>((set, get) => ({
@@ -62,6 +91,11 @@ export const useStore = create<PanelState>((set, get) => ({
   historySearch: '',
   settings: { ...DEFAULT_SETTINGS },
   showSettings: false,
+  conversationId: undefined,
+  conversation: undefined,
+  selectedTurnId: undefined,
+  conversations: [],
+  toast: undefined,
 
   setPrompt: (prompt) => set({ prompt }),
 
@@ -173,4 +207,161 @@ export const useStore = create<PanelState>((set, get) => ({
   },
 
   setShowSettings: (show: boolean) => set({ showSettings: show }),
+
+  // ── 多轮会话动作 ──
+  setConversation: (c) =>
+    set({
+      conversation: c ?? undefined,
+      conversationId: c?.id ?? get().conversationId,
+      selectedTurnId: c?.turns.length ? c.turns[c.turns.length - 1].id : get().selectedTurnId,
+    }),
+
+  setConversations: (list) => set({ conversations: list }),
+
+  setToast: (msg) => set({ toast: msg }),
+
+  newConversation: async () => {
+    const res = (await sendToBackground({ type: 'NEW_CONVERSATION' })) as
+      | { type: 'CONVERSATION_UPDATE'; conversation: Conversation }
+      | undefined;
+    if (res?.conversation) {
+      set({ conversation: res.conversation, conversationId: res.conversation.id, selectedTurnId: undefined });
+    }
+  },
+
+  openConversation: async (id) => {
+    const res = (await sendToBackground({ type: 'GET_CONVERSATION', conversationId: id })) as
+      | { type: 'CONVERSATION_UPDATE'; conversation: Conversation | null }
+      | undefined;
+    if (res) {
+      set({
+        conversation: res.conversation ?? undefined,
+        conversationId: id,
+        selectedTurnId: res.conversation?.turns.length
+          ? res.conversation.turns[res.conversation.turns.length - 1].id
+          : undefined,
+      });
+    }
+  },
+
+  openCurrentConversation: async () => {
+    const res = (await sendToBackground({ type: 'GET_CONVERSATION' })) as
+      | { type: 'CONVERSATION_UPDATE'; conversation: Conversation | null }
+      | undefined;
+    if (res?.conversation) {
+      set({
+        conversation: res.conversation,
+        conversationId: res.conversation.id,
+        selectedTurnId: res.conversation.turns.length
+          ? res.conversation.turns[res.conversation.turns.length - 1].id
+          : undefined,
+      });
+    }
+  },
+
+  listConversationsAction: async () => {
+    const res = (await sendToBackground({ type: 'LIST_CONVERSATIONS' })) as
+      | { type: 'CONVERSATION_LIST'; conversations: Conversation[] }
+      | undefined;
+    if (res) set({ conversations: res.conversations });
+  },
+
+  renameCurrent: async (title) => {
+    if (!get().conversationId) return;
+    await sendToBackground({ type: 'RENAME_CONVERSATION', conversationId: get().conversationId!, title });
+  },
+
+  deleteCurrent: async (id) => {
+    await sendToBackground({ type: 'DELETE_CONVERSATION', conversationId: id });
+    if (get().conversationId === id) {
+      set({ conversation: undefined, conversationId: undefined, selectedTurnId: undefined });
+    }
+    await get().listConversationsAction();
+  },
+
+  selectTurn: (id) => set({ selectedTurnId: id }),
+
+  sendTurn: async (prompt, targets) => {
+    const text = prompt.trim();
+    if (!text || targets.length === 0) return;
+
+    let convId = get().conversationId;
+    if (!convId) {
+      const res = (await sendToBackground({ type: 'NEW_CONVERSATION' })) as
+        | { type: 'CONVERSATION_UPDATE'; conversation: Conversation }
+        | undefined;
+      convId = res?.conversation?.id;
+      if (!convId) return;
+    }
+
+    const turnId = generateTaskId();
+    set({ currentTaskId: turnId, selectedTurnId: turnId, isLoading: true, conversationId: convId });
+
+    const safetyTimer = setTimeout(() => set({ isLoading: false }), 300000);
+    try {
+      await sendToBackground({
+        type: 'APPEND_TURN',
+        conversationId: convId!,
+        turnId,
+        prompt: text,
+        targets,
+      });
+    } catch {
+      set({ isLoading: false });
+      clearTimeout(safetyTimer);
+    }
+  },
+
+  manualGrabProvider: async (provider) => {
+    const { conversationId, selectedTurnId, conversation, prompt } = get();
+    if (!conversationId || !selectedTurnId) return;
+    const turn = conversation?.turns.find((t) => t.id === selectedTurnId);
+    const p = prompt || turn?.prompt || '';
+    const res = (await sendToBackground({
+      type: 'MANUAL_GRAB',
+      conversationId,
+      turnId: selectedTurnId,
+      provider,
+      prompt: p,
+    })) as { type: 'GRAB_RESULT'; ok: boolean; method?: string; error?: string } | undefined;
+    set({
+      toast: res?.ok
+        ? `手动抓取成功（${res.method === 'scissor' ? '精确' : '兜底'}）`
+        : `手动抓取失败：${res?.error ?? ''}`,
+    });
+    setTimeout(() => set({ toast: undefined }), 2600);
+  },
+
+  manualGrabAllTurn: async () => {
+    const { conversationId, selectedTurnId, conversation, prompt } = get();
+    if (!conversationId || !selectedTurnId) return;
+    const turn = conversation?.turns.find((t) => t.id === selectedTurnId);
+    const p = prompt || turn?.prompt || '';
+    set({ isLoading: true });
+    const res = (await sendToBackground({
+      type: 'MANUAL_GRAB_ALL',
+      conversationId,
+      turnId: selectedTurnId,
+      prompt: p,
+    })) as { type: 'GRAB_RESULT'; ok: boolean; error?: string } | undefined;
+    set({
+      isLoading: false,
+      toast: res?.ok ? '全部手动抓取完成' : `批量抓取未全部成功：${res?.error ?? ''}`,
+    });
+    setTimeout(() => set({ toast: undefined }), 2600);
+  },
+
+  exportMd: async (layout, sink, providers) => {
+    const { conversationId } = get();
+    if (!conversationId) return;
+    const res = (await sendToBackground({
+      type: 'EXPORT_MARKDOWN',
+      conversationId,
+      layout,
+      sink,
+      providers,
+    })) as { type: 'EXPORT_RESULT'; ok: boolean; error?: string } | undefined;
+    set({ toast: res?.ok ? '已导出 Markdown' : `导出失败：${res?.error ?? ''}` });
+    setTimeout(() => set({ toast: undefined }), 2600);
+  },
 }));
