@@ -17,7 +17,8 @@ const ProviderCard: React.FC<{
   answer?: Answer;
   onCopy: () => void;
   onManual: () => void;
-}> = ({ provider, content, status, answer, onCopy, onManual }) => {
+  onRetry: () => void;
+}> = ({ provider, content, status, answer, onCopy, onManual, onRetry }) => {
   const isStreaming = status === 'streaming' || status === 'sending' || status === 'waiting';
   const isError = status === 'error' || status === 'login_required';
   return (
@@ -41,7 +42,12 @@ const ProviderCard: React.FC<{
           复制
         </button>
         {answer?.source === 'manual' && <span className={styles.tagManual}>手动补录</span>}
-        {(status !== 'done' || !answer) && (
+        {isError && (
+          <button className={styles.miniBtn} onClick={onRetry}>
+            ↻ 重试
+          </button>
+        )}
+        {(status !== 'done' || !answer) && !isError && (
           <button className={styles.miniBtn} onClick={onManual}>
             📥 手动抓取
           </button>
@@ -70,6 +76,7 @@ const Fullscreen: React.FC = () => {
   const selectTurn = useStore((s) => s.selectTurn);
   const sendTurn = useStore((s) => s.sendTurn);
   const manualGrabProvider = useStore((s) => s.manualGrabProvider);
+  const retryProvider = useStore((s) => s.retryProvider);
   const manualGrabAllTurn = useStore((s) => s.manualGrabAllTurn);
   const exportMd = useStore((s) => s.exportMd);
   const switchPanelMode = useStore((s) => s.switchPanelMode);
@@ -191,6 +198,7 @@ const Fullscreen: React.FC = () => {
                       answer={turn.answers[p]}
                       onCopy={() => navigator.clipboard.writeText(content).catch(() => {})}
                       onManual={() => manualGrabProvider(p)}
+                      onRetry={() => retryProvider(p)}
                     />
                   );
                 })}

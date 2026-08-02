@@ -22,6 +22,8 @@ interface StatusButtonProps {
 }
 
 const StatusButton: React.FC<StatusButtonProps> = ({ provider, status, error, tabId }) => {
+  const retryProvider = useStore((s) => s.retryProvider);
+
   const handleClick = () => {
     if (tabId !== undefined && (status === 'done' || status === 'streaming')) {
       chrome.tabs.update(tabId, { active: true }).catch(() => {});
@@ -29,18 +31,30 @@ const StatusButton: React.FC<StatusButtonProps> = ({ provider, status, error, ta
   };
 
   const clickable = tabId !== undefined && (status === 'done' || status === 'streaming');
+  const canRetry = status === 'error' || status === 'login_required';
 
   return (
-    <button
-      className={`${styles.btn} ${styles[status] || ''} ${clickable ? styles.clickable : ''}`}
-      onClick={clickable ? handleClick : undefined}
-      title={error || (clickable ? 'Click to open tab' : '')}
-      disabled={!clickable && status !== 'error'}
-    >
-      <StatusIcon status={status} />
-      <span className={styles.label}>{PROVIDER_LABELS[provider]}</span>
-      <span className={styles.status}>{error || STATUS_LABELS[status]}</span>
-    </button>
+    <div className={`${styles.btnWrap} ${styles[status] || ''}`}>
+      <button
+        className={`${styles.btn} ${clickable ? styles.clickable : ''}`}
+        onClick={clickable ? handleClick : undefined}
+        title={error || (clickable ? 'Click to open tab' : '')}
+        disabled={!clickable}
+      >
+        <StatusIcon status={status} />
+        <span className={styles.label}>{PROVIDER_LABELS[provider]}</span>
+        <span className={styles.status}>{error || STATUS_LABELS[status]}</span>
+      </button>
+      {canRetry && (
+        <button
+          className={styles.retryBtn}
+          onClick={() => retryProvider(provider)}
+          title="重试发送"
+        >
+          ↻ 重试
+        </button>
+      )}
+    </div>
   );
 };
 
