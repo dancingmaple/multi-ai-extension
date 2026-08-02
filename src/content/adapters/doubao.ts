@@ -203,11 +203,14 @@ export class DoubaoAdapter extends BaseAdapter {
       await new Promise((r) => setTimeout(r, CONFIG.WRITE_VERIFY_MS));
       if (writeOk(el, prompt)) { ok = true; used = name; break; }
     }
-    // 唤醒发送按钮（豆包"空内容禁用"）
-    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: prompt }));
+    // 唤醒发送按钮（豆包"空内容禁用"）：用完整 keydown→input→change→keyup 序列触发 React 状态
+    el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a', code: 'KeyA' }));
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: prompt, inputType: 'insertText' }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
     el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a', code: 'KeyA' }));
-    await new Promise((r) => setTimeout(r, 300));
+    el.blur();
+    el.focus();
+    await new Promise((r) => setTimeout(r, 400));
 
     log('setPrompt', { ok, used, readBack: readBack(el).length, editable: isEditable(el) });
     if (!ok) log('setPrompt 警告：回读未确认写入，submit 将尝试重写');
@@ -255,6 +258,19 @@ export class DoubaoAdapter extends BaseAdapter {
         for (let i = 0; i < 6 && cont; i++) { cont = cont.parentElement; if (cont && cont.querySelector('button svg, button [class*="icon"]')) break; }
         const btn = cont ? ([...cont.querySelectorAll('button')].filter(isVisible) as HTMLElement[]).pop() : null;
         if (btn) btn.click();
+      }],
+      ['forceEnableClick', () => {
+        const b = collectSendButtons();
+        const t = b[b.length - 1] as HTMLButtonElement | undefined;
+        if (!t) return;
+        const was = t.disabled;
+        t.disabled = false;
+        t.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        t.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        t.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+        t.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        t.click();
+        t.disabled = was;
       }],
     ];
 

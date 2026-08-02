@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { useStore } from './store';
-import { PromptInput, StatusBar, HistoryBar, HistoryList, SettingsPanel } from './components';
+import { PromptInput, StatusBar, HistoryBar, HistoryList, SettingsPanel, ProviderTabs, ResponseView } from './components';
 import Fullscreen from './Fullscreen';
 import type { BackgroundToUIMessage } from '../shared/types';
 import styles from './App.module.css';
@@ -81,6 +81,8 @@ const App: React.FC = () => {
           </div>
           <PromptInput />
           <StatusBar />
+          <ProviderTabs />
+          <ResponseView />
           <HistoryBar />
           {showHistoryList && <HistoryList />}
           {showSettings && <SettingsPanel />}
