@@ -113,6 +113,9 @@ export type AppendTurnMessage = {
   turnId: string;
   prompt: string;
   targets: ProviderName[];
+  // embed=true：仅记录本轮 + 建一个 waiting 任务，不打开标签页 / 不自动派发。
+  // 真正的执行由插件内的 iframe（网页视图）通过 postMessage 触发。
+  embed?: boolean;
 };
 
 export type GetConversationMessage = {

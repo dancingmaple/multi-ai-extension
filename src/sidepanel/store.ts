@@ -46,6 +46,10 @@ interface PanelState {
   // ── 主题（网页风格切换） ──
   theme: 'light' | 'dark' | 'auto';
   setTheme: (t: 'light' | 'dark' | 'auto') => void;
+  // ── 视图模式：对比卡片 / 网页视图（iframe 嵌入） ──
+  viewMode: 'compare' | 'web';
+  setViewMode: (m: 'compare' | 'web') => void;
+  webSendNonce: number;
   // ── 大弹窗阅读器 ──
   reader: { open: boolean; providers: ProviderName[]; index: number; turnId?: string };
   openReader: (providers: ProviderName[], index: number, turnId?: string) => void;
@@ -83,6 +87,8 @@ interface PanelState {
   manualGrabProvider: (provider: ProviderName) => Promise<void>;
   manualGrabAllTurn: () => Promise<void>;
   exportMd: (layout: ExportLayout, sink: ExportSink, providers?: ProviderName[]) => Promise<void>;
+  // ── 网页视图发送：不打开标签页，由 WebView 把 prompt 发给 iframe ──
+  sendEmbed: (prompt: string, providers: ProviderName[]) => Promise<void>;
 }
 
 export const useStore = create<PanelState>((set, get) => ({
@@ -106,6 +112,8 @@ export const useStore = create<PanelState>((set, get) => ({
   toast: undefined,
   theme: 'light',
   reader: { open: false, providers: [], index: 0 },
+  viewMode: 'compare',
+  webSendNonce: 0,
 
   setPrompt: (prompt) => set({ prompt }),
 
@@ -132,6 +140,11 @@ export const useStore = create<PanelState>((set, get) => ({
   sendPrompt: async () => {
     const { prompt, selectedProviders } = get();
     if (!prompt.trim() || selectedProviders.length === 0) return;
+
+    set({ toast: `正在向 ${selectedProviders.length} 家 AI 发起请求…` });
+    setTimeout(() => {
+      if (get().toast?.startsWith('正在向')) set({ toast: undefined });
+    }, 2600);
 
     const taskId = generateTaskId();
     set({ currentTaskId: taskId, isLoading: true });
@@ -306,6 +319,10 @@ export const useStore = create<PanelState>((set, get) => ({
 
     const turnId = generateTaskId();
     set({ currentTaskId: turnId, selectedTurnId: turnId, isLoading: true, conversationId: convId });
+    set({ toast: `正在向 ${targets.length} 家 AI 发起请求…` });
+    setTimeout(() => {
+      if (get().toast?.startsWith('正在向')) set({ toast: undefined });
+    }, 2600);
 
     const safetyTimer = setTimeout(() => set({ isLoading: false }), 300000);
     try {
@@ -380,6 +397,11 @@ export const useStore = create<PanelState>((set, get) => ({
     chrome.storage.local.set({ theme: t }).catch(() => {});
   },
 
+  setViewMode: (m) => {
+    set({ viewMode: m });
+    chrome.storage.local.set({ viewMode: m }).catch(() => {});
+  },
+
   openReader: (providers, index, turnId) => set({ reader: { open: true, providers, index, turnId } }),
 
   closeReader: () => set((s) => ({ reader: { ...s.reader, open: false } })),
@@ -391,4 +413,43 @@ export const useStore = create<PanelState>((set, get) => ({
       const index = (s.reader.index + dir + n) % n;
       return { reader: { ...s.reader, index } };
     }),
+
+  sendEmbed: async (prompt, providers) => {
+    const text = prompt.trim();
+    if (!text || providers.length === 0) return;
+
+    let convId = get().conversationId;
+    if (!convId) {
+      const res = (await sendToBackground({ type: 'NEW_CONVERSATION' })) as
+        | { type: 'CONVERSATION_UPDATE'; conversation: Conversation }
+        | undefined;
+      convId = res?.conversation?.id;
+      if (!convId) return;
+    }
+
+    const turnId = generateTaskId();
+    set({
+      currentTaskId: turnId,
+      selectedTurnId: turnId,
+      isLoading: true,
+      conversationId: convId,
+      viewMode: 'web',
+      webSendNonce: get().webSendNonce + 1,
+    });
+
+    const safetyTimer = setTimeout(() => set({ isLoading: false }), 300000);
+    try {
+      await sendToBackground({
+        type: 'APPEND_TURN',
+        conversationId: convId!,
+        turnId,
+        prompt: text,
+        targets: providers,
+        embed: true,
+      });
+    } catch {
+      set({ isLoading: false });
+      clearTimeout(safetyTimer);
+    }
+  },
 }));

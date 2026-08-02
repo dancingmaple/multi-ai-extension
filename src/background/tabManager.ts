@@ -20,18 +20,27 @@ export async function getOrCreateProviderTab(provider: ProviderName): Promise<nu
   }
 
   const url = getProviderUrl(provider);
-  console.log('[MultiAI:tabManager] Creating new tab for', url);
-  const tab = await chrome.tabs.create({ url, active: false });
-  if (!tab.id) throw new Error(`Failed to create tab for ${provider}`);
-  console.log('[MultiAI:tabManager] Created tab', tab.id, 'for', provider);
+  // 新建标签页时，部分 AI 站点 SPA 启动较慢，content script 可能第一次 ping 不到。
+  // 这里允许重试一次，避免「第一次发送无法发起」。
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      console.log('[MultiAI:tabManager] Creating new tab for', url, 'attempt', attempt + 1);
+      const tab = await chrome.tabs.create({ url, active: false });
+      if (!tab.id) throw new Error(`Failed to create tab for ${provider}`);
+      console.log('[MultiAI:tabManager] Created tab', tab.id, 'for', provider);
 
-  await waitForTabReady(tab.id);
-  console.log('[MultiAI:tabManager] Tab', tab.id, 'ready, settling...');
-  await sleep(TAB_SETTLE_MS);
-  await ensureContentScriptReady(tab.id);
-  console.log('[MultiAI:tabManager] Content script ready in tab', tab.id);
+      await waitForTabReady(tab.id);
+      console.log('[MultiAI:tabManager] Tab', tab.id, 'ready, settling...');
+      await sleep(TAB_SETTLE_MS);
+      await ensureContentScriptReady(tab.id);
+      console.log('[MultiAI:tabManager] Content script ready in tab', tab.id);
+      return tab.id;
+    } catch (e) {
+      console.warn('[MultiAI:tabManager] attempt', attempt + 1, 'failed for', provider, ':', e);
+    }
+  }
 
-  return tab.id;
+  throw new Error(`无法为 ${provider} 准备好标签页（content script 未就绪）`);
 }
 
 async function findExistingTab(provider: ProviderName): Promise<number | null> {

@@ -33,9 +33,10 @@ export class GeminiAdapter extends BaseAdapter {
 
   readonly submitSelectors = [
     'button[aria-label="Send message"]',
-    'button[aria-label*="Send"]',
-    'button[aria-label*="发送"]',
-    'button[aria-label*="send"]',
+    'button[aria-label="发送消息"]',
+    'button[aria-label*="Send" i]',
+    'button[aria-label*="发送" i]',
+    'button[aria-label*="send" i]',
   ];
 
   readonly responseSelectors = [
@@ -150,7 +151,7 @@ export class GeminiAdapter extends BaseAdapter {
   }
 
   override async submit(): Promise<void> {
-    await sleep(200);
+    await sleep(250);
 
     // 如果输入框为空，重写一次
     const input = this.findInput();
@@ -158,17 +159,23 @@ export class GeminiAdapter extends BaseAdapter {
       await this.setPrompt(this.lastPrompt);
     }
 
-    // 尝试找发送按钮（包括 disabled，因为 Gemini 有时会短暂禁用）
+    // 尝试找发送按钮（包括 disabled，因为 Gemini 有时会短暂禁用）。
+    // 除选择器外，额外扫描按钮文本/aria-label 含 send/发送（大小写不敏感）。
     const findBtn = (): HTMLButtonElement | null => {
       for (const s of this.submitSelectors) {
         const el = [...document.querySelectorAll(s)].find((e) => this.isVisible(e)) as HTMLButtonElement | undefined;
         if (el) return el;
       }
+      const allBtns = [...document.querySelectorAll('button')] as HTMLButtonElement[];
+      for (const b of allBtns) {
+        if (!this.isVisible(b)) continue;
+        const label = (b.getAttribute('aria-label') || b.textContent || '').toLowerCase();
+        if (label.includes('send') || label.includes('发送')) return b;
+      }
       return null;
     };
 
-    const btn = findBtn();
-    if (btn) {
+    const tryClick = (btn: HTMLButtonElement): void => {
       const was = btn.disabled;
       btn.disabled = false;
       btn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
@@ -177,6 +184,23 @@ export class GeminiAdapter extends BaseAdapter {
       btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
       btn.click();
       btn.disabled = was;
+    };
+
+    const btn = findBtn();
+    if (btn) {
+      tryClick(btn);
+      // Gemini 有时点击后并无反应（按钮状态未及时刷新），短暂等待后校验：
+      // 若输入框仍有内容且页面未出现回答迹象，则补一次 setPrompt + 点击。
+      await sleep(900);
+      const stillThere = input && this.readBack(input).length >= 2;
+      const responded = pageText().length > this.preSendLen + 24;
+      if (stillThere && !responded) {
+        console.warn('[Gemini:adapter] 首次点击未触发，补发一次');
+        await this.setPrompt(this.lastPrompt);
+        const btn2 = findBtn();
+        if (btn2) tryClick(btn2);
+        else if (input) this.fireEnter(input);
+      }
       return;
     }
 

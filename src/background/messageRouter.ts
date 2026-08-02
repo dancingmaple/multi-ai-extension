@@ -273,6 +273,13 @@ export async function handleUIMessage(
         prompt: msg.prompt,
         targets: msg.targets,
       });
+      if (msg.embed) {
+        // 嵌入视图：只建任务（waiting）并广播初始状态，不打开标签页、不自动派发。
+        // 实际执行由网页视图里的 iframe 通过 postMessage 触发。
+        const task = createTask(msg.turnId, msg.prompt, msg.targets);
+        broadcastTaskState({ type: 'TASK_STATE_UPDATE', task });
+        return undefined;
+      }
       await handleAskAll(msg.turnId, msg.prompt, msg.targets, msg.conversationId);
       return undefined;
     }

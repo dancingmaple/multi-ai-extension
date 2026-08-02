@@ -5,7 +5,7 @@ const manifest: ManifestV3Export = {
   name: 'Multi AI Web Automation',
   version: '1.0.0',
   description: 'Send one prompt to 6 AI web apps and view answers side by side',
-  permissions: ['tabs', 'storage', 'scripting', 'sidePanel', 'webNavigation', 'alarms', 'downloads'],
+  permissions: ['tabs', 'storage', 'scripting', 'sidePanel', 'webNavigation', 'alarms', 'downloads', 'declarativeNetRequestWithHostAccess'],
   host_permissions: [
     'https://chatgpt.com/*',
     'https://gemini.google.com/*',
@@ -42,6 +42,7 @@ const manifest: ManifestV3Export = {
       ],
       js: ['src/content/index.ts'],
       run_at: 'document_idle',
+      all_frames: true,
     },
   ],
   action: {

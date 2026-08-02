@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useStore } from './store';
 import { ALL_PROVIDERS, PROVIDER_LABELS } from '../shared/constants';
 import type { ProviderName, Turn, Answer, Conversation } from '../shared/types';
+import WebView from './WebView';
 import styles from './Fullscreen.module.css';
 
 const fmtTime = (ts: number): string => {
@@ -91,6 +92,9 @@ const Fullscreen: React.FC = () => {
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
   const openReader = useStore((s) => s.openReader);
+  const viewMode = useStore((s) => s.viewMode);
+  const setViewMode = useStore((s) => s.setViewMode);
+  const sendEmbed = useStore((s) => s.sendEmbed);
 
   const [drawer, setDrawer] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
@@ -115,7 +119,11 @@ const Fullscreen: React.FC = () => {
   const liveTask = task && turn && task.taskId === turn.id ? task : undefined;
 
   const handleSend = () => {
-    sendTurn(prompt, selectedProviders);
+    if (viewMode === 'web') {
+      sendEmbed(prompt, selectedProviders);
+    } else {
+      sendTurn(prompt, selectedProviders);
+    }
     setPrompt('');
   };
 
@@ -149,6 +157,13 @@ const Fullscreen: React.FC = () => {
         </button>
         <button className={styles.iconBtn} onClick={() => newConversation()} title="新会话">
           ＋
+        </button>
+        <button
+          className={styles.iconBtn}
+          onClick={() => setViewMode(viewMode === 'web' ? 'compare' : 'web')}
+          title={viewMode === 'web' ? '切换到对比卡片视图' : '切换到网页视图（把 AI 网页嵌入插件）'}
+        >
+          {viewMode === 'web' ? '▦ 对比' : '🌐 网页'}
         </button>
         <button
           className={styles.iconBtn}
@@ -190,7 +205,9 @@ const Fullscreen: React.FC = () => {
 
         {/* 对照区 */}
         <main className={styles.compare}>
-          {turn ? (
+          {viewMode === 'web' ? (
+            <WebView layout="columns" />
+          ) : turn ? (
             <>
               <div className={styles.compareHead}>
                 <span className={styles.turnLabel}>轮 {conversation!.turns.indexOf(turn) + 1} · {turn.prompt}</span>
