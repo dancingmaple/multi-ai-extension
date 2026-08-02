@@ -15,7 +15,7 @@ export const TAIL_META =
  * 一旦在回答后出现，立即截断（取它之前的内容）。
  */
 export const STOP_FOOTER =
-  /^(Gemini is AI|Gemini may display inaccurate|Gemini Apps|Gemini Advanced|Gemini can make mistakes|Gemini is experimental|I'm Gemini|以上(?:内容|回答|结果|文本).{0,30}(?:AI|人工智能).{0,20}(?:生成|提供)|(?:AI|人工智能).{0,20}(?:生成|提供).{0,20}(?:仅供参考|内容|回答)|本回答由.{0,10}(?:AI|人工智能).{0,10}生成|以上内容仅供|结果仅供参考|免责声明|免责说明|隐私政策|隐私条款|用户协议|使用条款|服务条款|Cookie|Feedback|报告问题|ICP备|京ICP|沪ICP|粤ICP|苏ICP|备案号|技术支持|联系我们|关于我们|登录|注册|登录\/注册|立即登录|帮助中心|意见反馈)$/i;
+  /^(Gemini is AI|Gemini may display inaccurate|Gemini Apps|Gemini Advanced|Gemini can make mistakes|Gemini is experimental|I'm Gemini|以上(?:内容|回答|结果|文本).{0,30}(?:AI|人工智能).{0,20}(?:生成|提供)|(?:AI|人工智能).{0,20}(?:生成|提供).{0,20}(?:仅供参考|内容|回答)|本回答由.{0,10}(?:AI|人工智能).{0,10}生成|以上内容(?:仅供|均由AI生成|由AI生成)|结果仅供参考|免责声明|免责说明|隐私政策|隐私条款|用户协议|使用条款|服务条款|Cookie|Feedback|报告问题|ICP备|京ICP|沪ICP|粤ICP|苏ICP|备案号|技术支持|联系我们|关于我们|登录|注册|登录\/注册|立即登录|帮助中心|意见反馈|最高|技术博客|快速|图像生成|视频生成|AI\s*播客|帮我写作|翻译|音乐生成|深入研究)$/i;
 
 export function extractAnswer(
   pageText: string,

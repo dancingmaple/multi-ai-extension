@@ -1,6 +1,7 @@
 import type { ProviderName } from '../../shared/types';
 import { BaseAdapter } from './base';
 import { SubmitFailedError } from '../../shared/utils';
+import { extractAnswer } from '../../shared/grab';
 
 /* ============================================================
    豆包适配器 · inner-v2（写入闭环 + 提交闭环）
@@ -36,9 +37,7 @@ const CONFIG = {
   RESPONSE_SELECTORS: ['[data-testid="message-list"]', 'main', 'body'],
   LOGIN_SELECTORS: ['a[href*="/login"]', 'a[href*="/signin"]', 'a[href*="passport"]'],
 
-  /* 抓取相关（与 inner-v1 相同） */
-  HEAD_LINE: /^(思考了|已思考|思考中|Thought for|Thinking|Reasoned|Reasoning|搜索了|联网搜索|Searching|Searched|Found\s+\d+|阅读了|Read\s+\d+|查看了|引用了|\d+\s*个\s*(网页|来源|结果|web\s*pages?)|DeepThink|Instant|深度思考|联网搜索中|搜索中|生成中)/i,
-  TAIL_LINE: /^(复制|点赞|点踩|重新生成|再生成|分享|引用|参考来源|参考|来源|DeepThink|联网搜索|Instant|搜索|给\s*豆包|发消息|发送|Message|⎘||👎|◎|↻)/i,
+  /* 抓取相关 */
   PROGRESS: /(思考中|搜索中|联网搜索中|生成中|正在搜索|正在思考|正在阅读|正在联网|Searching(?! for)|Reading\s+\d)/i,
   PLACEHOLDER_RE: /^[.…·••\s…\u2026\u00b7]*$/,
 
@@ -162,25 +161,30 @@ function collectSendButtons(): HTMLElement[] {
   return out.sort((a, b) => btnScore(b) - btnScore(a));
 }
 
-/* 抓取相关（与 inner-v1 相同） */
-function rootEl(): Element {
-  return document.querySelector('[data-testid="message-list"]') || document.querySelector('main') || document.body;
+/* 抓取：优先从对话主容器取文本，统一用 shared/grab 剪刀法 */
+function rootEl(): HTMLElement {
+  const selectors = [
+    '[data-testid="message-list"]',
+    '.chat-messages',
+    '.message-list',
+    '.chat-content',
+    '.conversation-content',
+    '.conversation-main',
+    'main[class*="chat"]',
+    'main',
+  ];
+  for (const s of selectors) {
+    const el = document.querySelector(s) as HTMLElement | null;
+    if (el && isVisible(el) && el.innerText.trim().length > 20) return el;
+  }
+  return document.body;
 }
 function grabText(): string {
-  const r = rootEl();
-  return ((r && (r as HTMLElement).innerText) || document.body.innerText || '').replace(/\u00a0/g, ' ');
+  return (rootEl().innerText || document.body.innerText || '').replace(/\u00a0/g, ' ');
 }
 function grabLen(): number { return grabText().length; }
-function extractAnswer(text: string, prompt: string): string {
-  const lines = text.split('\n').map((s) => s.replace(/\s+$/, '').replace(/^\s+/, '')).filter((s) => s.length > 0);
-  const key = (prompt || '').replace(/\s/g, '').slice(0, 12);
-  let q = -1;
-  if (key) for (let i = lines.length - 1; i >= 0; i--) { if (lines[i].replace(/\s/g, '').includes(key)) { q = i; break; } }
-  if (q < 0) return '';
-  let body = lines.slice(q + 1);
-  while (body.length && CONFIG.HEAD_LINE.test(body[0])) body.shift();
-  while (body.length && CONFIG.TAIL_LINE.test(body[body.length - 1])) body.pop();
-  return body.join('\n').trim();
+function localExtractAnswer(text: string, prompt: string): string {
+  return extractAnswer(text, prompt).text;
 }
 
 /* ============================================================
@@ -332,7 +336,7 @@ export class DoubaoAdapter extends BaseAdapter {
       const now = Date.now();
       const text = grabText();
       if (!started && text.length > gateLen + 12) { started = true; log('GATE OPEN len', text.length, '>', gateLen); }
-      const real = started ? extractAnswer(text, prompt) : '';
+      const real = started ? localExtractAnswer(text, prompt) : '';
       const isPlaceholder = !real || CONFIG.PLACEHOLDER_RE.test(real);
       const body = isPlaceholder ? '' : real;
       const show = body || (started ? CONFIG.THINKING_PLACEHOLDER : '');
@@ -345,14 +349,14 @@ export class DoubaoAdapter extends BaseAdapter {
       log('tick', { started, bodyLen: body.length, hasProgress, stableMs: elapsed, need, done });
       if (done) {
         stopped = true;
-        const final = extractAnswer(grabText(), prompt) || body;
+        const final = localExtractAnswer(grabText(), prompt) || body;
         log('DONE finalLen=', final.length);
         onUpdate(final); onDone(final); cleanup();
         return;
       }
       if (now - t0 >= CONFIG.HARD_TIMEOUT) {
         stopped = true; cleanup();
-        const final = extractAnswer(grabText(), prompt);
+        const final = localExtractAnswer(grabText(), prompt);
         if (final && !CONFIG.PLACEHOLDER_RE.test(final)) { log('HARD_TIMEOUT 有正文'); onDone(final); }
         else { log('HARD_TIMEOUT 无正文'); onError(new Error('StreamTimeoutError: 超时未抓到回答，可点重发')); }
       }

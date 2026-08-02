@@ -41,8 +41,27 @@ function isVisible(el: Element | null): boolean {
   return s.visibility !== 'hidden' && s.display !== 'none' && +s.opacity > 0.01;
 }
 
+/* 优先从对话主容器取文本，避免右侧/左侧工具栏混入 */
+function chatRoot(): HTMLElement {
+  const selectors = [
+    '[data-testid="message-list"]',
+    '.chat-messages',
+    '.message-list',
+    '.chat-content',
+    '.conversation-content',
+    '.conversation-main',
+    'main[class*="chat"]',
+    'main',
+  ];
+  for (const s of selectors) {
+    const el = document.querySelector(s) as HTMLElement | null;
+    if (el && isVisible(el) && el.innerText.trim().length > 20) return el;
+  }
+  return document.body;
+}
+
 function pageText(): string {
-  return (document.body.innerText || document.body.textContent || '').replace(/\u00a0/g, ' ');
+  return (chatRoot().innerText || document.body.innerText || '').replace(/\u00a0/g, ' ');
 }
 
 export class ZaiAdapter extends BaseAdapter {

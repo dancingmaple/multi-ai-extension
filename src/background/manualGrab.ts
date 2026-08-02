@@ -23,15 +23,51 @@ const DOMAIN_PATTERN: Record<string, string> = {
  * 读整页可见文本 → 用提问当剪刀剪出回答 → 剪不到兜底取页面后半段 →
  * 裁掉头尾元信息 + 页面 footer/免责声明。宁可抓糙，绝不抓空。
  */
-function grabInPage(args: { prompt: string }): { text: string; method: string } {
+function grabInPage(args: { prompt: string; provider?: string }): { text: string; method: string } {
   const HEAD =
     /^(思考了|已思考|思考中|Thought for|Thinking|Reasoned|Reasoning|搜索了|联网搜索|Searching|Searched|Found\s+\d+|阅读了|Read\s+\d+|查看了|引用了|\d+\s*个\s*(网页|来源|结果|web\s*pages?)|DeepThink|Instant|深度思考|联网搜索中|搜索中|生成中)/i;
   const TAIL =
     /^(复制|点赞|点踩|重新生成|再生成|分享|引用|参考来源|参考|来源|DeepThink|联网搜索|Instant|搜索|给\s*豆包|发消息|发送|Copy|Like|Dislike|Share|Regenerate|Retry|Message|⎘|👍|👎|◎|↻)/i;
   const STOP =
-    /^(Gemini is AI|Gemini may display inaccurate|Gemini Apps|Gemini Advanced|Gemini can make mistakes|Gemini is experimental|I'm Gemini|以上(?:内容|回答|结果|文本).{0,30}(?:AI|人工智能).{0,20}(?:生成|提供)|(?:AI|人工智能).{0,20}(?:生成|提供).{0,20}(?:仅供参考|内容|回答)|本回答由.{0,10}(?:AI|人工智能).{0,10}生成|以上内容仅供|结果仅供参考|免责声明|免责说明|隐私政策|隐私条款|用户协议|使用条款|服务条款|Cookie|Feedback|报告问题|ICP备|京ICP|沪ICP|粤ICP|苏ICP|备案号|技术支持|联系我们|关于我们|登录|注册|登录\/注册|立即登录|帮助中心|意见反馈)$/i;
+    /^(Gemini is AI|Gemini may display inaccurate|Gemini Apps|Gemini Advanced|Gemini can make mistakes|Gemini is experimental|I'm Gemini|以上(?:内容|回答|结果|文本).{0,30}(?:AI|人工智能).{0,20}(?:生成|提供)|(?:AI|人工智能).{0,20}(?:生成|提供).{0,20}(?:仅供参考|内容|回答)|本回答由.{0,10}(?:AI|人工智能).{0,10}生成|以上内容(?:仅供|均由AI生成|由AI生成)|结果仅供参考|免责声明|免责说明|隐私政策|隐私条款|用户协议|使用条款|服务条款|Cookie|Feedback|报告问题|ICP备|京ICP|沪ICP|粤ICP|苏ICP|备案号|技术支持|联系我们|关于我们|登录|注册|登录\/注册|立即登录|帮助中心|意见反馈|最高|技术博客|快速|图像生成|视频生成|AI\s*播客|帮我写作|翻译|音乐生成|深入研究)$/i;
+
+  function isVisible(el: Element | null): boolean {
+    if (!el || !(el instanceof HTMLElement)) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return false;
+    const s = getComputedStyle(el);
+    return s.visibility !== 'hidden' && s.display !== 'none' && +s.opacity > 0.01;
+  }
+
+  function pickRoot(): HTMLElement {
+    const common = [
+      '[data-testid="message-list"]',
+      '.chat-messages',
+      '.message-list',
+      '.chat-content',
+      '.conversation-content',
+      '.conversation-main',
+      'main[class*="chat"]',
+      'main',
+    ];
+    const providerRoots: Record<string, string[]> = {
+      zai: ['.chat-content', '.message-list', '.chat-messages', '.conversation-content', 'main[class*="chat"]', 'main'],
+      doubao: ['[data-testid="message-list"]', '.chat-messages', '.message-list', 'main'],
+      gemini: ['.conversation-container', '.chat-container', 'main', 'body'],
+      chatgpt: ['[data-testid="conversation-turn-2"]', '.conversation-content', 'main', 'body'],
+      deepseek: ['.chat-messages', '.message-list', 'main', 'body'],
+      qwen: ['.chat-messages', '.message-list', 'main', 'body'],
+    };
+    const order = args.provider && providerRoots[args.provider] ? providerRoots[args.provider] : common;
+    for (const s of order) {
+      const el = document.querySelector(s) as HTMLElement | null;
+      if (el && isVisible(el) && el.innerText.trim().length > 20) return el;
+    }
+    return document.body;
+  }
+
   const clean = (s: string) => s.replace(/\u00a0/g, ' ');
-  const root = (document.querySelector('main') || document.body) as HTMLElement;
+  const root = pickRoot();
   const raw = clean(root.innerText || document.body.innerText || '');
   const lines = raw.split('\n').map((s) => s.trim()).filter((s) => s.length > 0);
 
@@ -98,7 +134,7 @@ export async function manualGrab(
     const res = await chrome.scripting.executeScript({
       target: { tabId },
       func: grabInPage,
-      args: [{ prompt }],
+      args: [{ prompt, provider }],
     });
     const got = res?.[0]?.result || { text: '', method: 'none' };
     const text = (got.text || '').trim();

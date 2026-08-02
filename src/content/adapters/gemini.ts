@@ -71,18 +71,6 @@ export class GeminiAdapter extends BaseAdapter {
     return null;
   }
 
-  private findSendButton(): HTMLElement | null {
-    for (const s of this.submitSelectors) {
-      const el = [...document.querySelectorAll(s)].find((e) => {
-        if (!this.isVisible(e)) return false;
-        const b = e as HTMLButtonElement;
-        return !b.disabled;
-      }) as HTMLElement | undefined;
-      if (el) return el;
-    }
-    return null;
-  }
-
   private fireEnter(el: HTMLElement): void {
     const init = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true, composed: true, isComposing: false } as KeyboardEventInit;
     el.dispatchEvent(new KeyboardEvent('keydown', init));
@@ -98,6 +86,17 @@ export class GeminiAdapter extends BaseAdapter {
     await sleep(1500);
   }
 
+  private readBack(el: HTMLElement): string {
+    if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) return (el.value || '').trim();
+    return ((el as HTMLElement).innerText || el.textContent || '').trim();
+  }
+
+  private writeOk(el: HTMLElement, prompt: string): boolean {
+    const got = this.readBack(el);
+    const head = prompt.replace(/\s/g, '').slice(0, 8);
+    return got.replace(/\s/g, '').includes(head) || got.length >= Math.max(4, Math.floor(prompt.length * 0.8));
+  }
+
   override async setPrompt(prompt: string): Promise<void> {
     this.lastPrompt = prompt;
     this.preSendLen = pageText().length;
@@ -108,6 +107,20 @@ export class GeminiAdapter extends BaseAdapter {
     el.focus();
     await sleep(80);
 
+    // 先清空旧内容（第二轮常见残留）
+    if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+      const proto = Object.getPrototypeOf(el);
+      const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+      desc?.set?.call(el, '');
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    } else {
+      el.textContent = '';
+      try { document.execCommand('selectAll', false); document.execCommand('delete', false); } catch { /* noop */ }
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+    }
+    await sleep(80);
+
+    // 写入新内容
     if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
       const proto = Object.getPrototypeOf(el);
       const desc = Object.getOwnPropertyDescriptor(proto, 'value');
@@ -115,9 +128,7 @@ export class GeminiAdapter extends BaseAdapter {
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     } else {
-      // Gemini 的 Quill 编辑器：先清空再插入
       try {
-        document.execCommand('selectAll', false);
         document.execCommand('insertText', false, prompt);
       } catch {
         el.textContent = prompt;
@@ -126,24 +137,49 @@ export class GeminiAdapter extends BaseAdapter {
       el.dispatchEvent(new Event('change', { bubbles: true }));
     }
 
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', code: 'KeyA', bubbles: true }));
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: prompt, inputType: 'insertText' }));
     el.dispatchEvent(new KeyboardEvent('keyup', { key: 'a', code: 'KeyA', bubbles: true }));
+    el.blur();
+    el.focus();
     await sleep(300);
+
+    if (!this.writeOk(el, prompt)) {
+      console.warn('[Gemini:adapter] setPrompt 回读未确认，继续尝试 submit');
+    }
   }
 
   override async submit(): Promise<void> {
-    await sleep(150);
+    await sleep(200);
 
-    const btn = this.findSendButton();
+    // 如果输入框为空，重写一次
+    const input = this.findInput();
+    if (input && this.readBack(input).length < 2) {
+      await this.setPrompt(this.lastPrompt);
+    }
+
+    // 尝试找发送按钮（包括 disabled，因为 Gemini 有时会短暂禁用）
+    const findBtn = (): HTMLButtonElement | null => {
+      for (const s of this.submitSelectors) {
+        const el = [...document.querySelectorAll(s)].find((e) => this.isVisible(e)) as HTMLButtonElement | undefined;
+        if (el) return el;
+      }
+      return null;
+    };
+
+    const btn = findBtn();
     if (btn) {
+      const was = btn.disabled;
+      btn.disabled = false;
       btn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
       btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
       btn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
       btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
       btn.click();
+      btn.disabled = was;
       return;
     }
 
-    const input = this.findInput();
     if (input) {
       input.focus();
       this.fireEnter(input);
