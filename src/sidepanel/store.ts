@@ -50,6 +50,8 @@ interface PanelState {
   viewMode: 'compare' | 'web';
   setViewMode: (m: 'compare' | 'web') => void;
   webSendNonce: number;
+  // 网页视图当前要发送的载荷（不依赖 conversation 已写入 turn）
+  embedSend?: { turnId: string; prompt: string; targets: ProviderName[]; nonce: number };
   // ── 大弹窗阅读器 ──
   reader: { open: boolean; providers: ProviderName[]; index: number; turnId?: string };
   openReader: (providers: ProviderName[], index: number, turnId?: string) => void;
@@ -428,13 +430,15 @@ export const useStore = create<PanelState>((set, get) => ({
     }
 
     const turnId = generateTaskId();
+    const nonce = get().webSendNonce + 1;
     set({
       currentTaskId: turnId,
       selectedTurnId: turnId,
       isLoading: true,
       conversationId: convId,
       viewMode: 'web',
-      webSendNonce: get().webSendNonce + 1,
+      webSendNonce: nonce,
+      embedSend: { turnId, prompt: text, targets: providers, nonce },
     });
 
     const safetyTimer = setTimeout(() => set({ isLoading: false }), 300000);
