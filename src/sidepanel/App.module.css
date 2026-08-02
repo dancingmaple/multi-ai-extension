@@ -58,3 +58,44 @@
 .modeBtn:hover {
   background: #f3f4f6;
 }
+
+.exportWrap {
+  position: relative;
+}
+
+.exportMenu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  min-width: 140px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  z-index: 100;
+  padding: 4px 0;
+}
+
+.exportGroup {
+  padding: 4px 10px;
+  font-size: 11px;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.exportItem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #374151;
+  cursor: pointer;
+}
+
+.exportItem:hover {
+  background: #f3f4f6;
+}

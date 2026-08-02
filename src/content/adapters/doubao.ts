@@ -116,26 +116,50 @@ function writeOk(el: HTMLElement, prompt: string): boolean {
   return got.replace(/\s/g, '').includes(head) || got.length >= Math.max(4, Math.floor(prompt.length * 0.8));
 }
 
-/* 收集发送按钮候选：语义选择器 + 输入框同容器末尾按钮（兜底大招） */
+/* 收集发送按钮候选：精确 > 语义 > 输入框同容器；按页面 x 坐标最右优先，并排除工具菜单 */
+const EXCLUDED_BTN_TEXT_RE = /^(更多|工具|\+)$/;
+function btnScore(btn: HTMLElement): number {
+  // 精确发送按钮最高优先级
+  if (btn.getAttribute('data-testid') === 'chat_input_send_button') return 10000;
+  const rect = btn.getBoundingClientRect();
+  // 有圆形/蓝色发送特征加分；越靠右越好
+  const cls = String(btn.className || '');
+  const isRound = cls.includes('round') || (rect.width > 28 && rect.width === rect.height);
+  const hasSvg = !!btn.querySelector('svg');
+  let score = rect.right;
+  if (hasSvg) score += 500;
+  if (isRound) score += 300;
+  return score;
+}
+function isSendButton(el: HTMLElement): boolean {
+  const text = (el.textContent || '').trim();
+  if (EXCLUDED_BTN_TEXT_RE.test(text)) return false;
+  if (el.getAttribute('data-testid') === 'chat_input_send_button') return true;
+  const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+  if (aria.includes('send') || aria.includes('发送')) return true;
+  return true; // 兜底：只要在同容器且不是"更多"都纳入候选
+}
 function collectSendButtons(): HTMLElement[] {
+  const exact = document.querySelector('button[data-testid="chat_input_send_button"]') as HTMLElement | null;
   const bySel = [...document.querySelectorAll(CONFIG.SUBMIT_SELECTORS.join(','))].filter(isVisible) as HTMLElement[];
   const inputEl = findVisibleInput();
   const byContainer: HTMLElement[] = [];
   if (inputEl) {
     let cont: HTMLElement | null = inputEl;
-    for (let i = 0; i < 6 && cont; i++) {
+    for (let i = 0; i < 7 && cont; i++) {
       cont = cont.parentElement;
       if (cont && cont.querySelectorAll('button').length >= 1) break;
     }
     if (cont) {
-      const inC = [...cont.querySelectorAll('button')].filter(isVisible) as HTMLElement[];
+      const inC = [...cont.querySelectorAll('button')].filter((b) => isVisible(b) && isSendButton(b as HTMLElement)) as HTMLElement[];
       byContainer.push(...inC);
     }
   }
   const seen = new Set<HTMLElement>();
   const out: HTMLElement[] = [];
+  if (exact) { seen.add(exact); out.push(exact); }
   for (const b of bySel.concat(byContainer)) { if (!seen.has(b)) { seen.add(b); out.push(b); } }
-  return out;
+  return out.sort((a, b) => btnScore(b) - btnScore(a));
 }
 
 /* 抓取相关（与 inner-v1 相同） */
@@ -247,21 +271,14 @@ export class DoubaoAdapter extends BaseAdapter {
     };
 
     const strategies: Array<[string, () => void]> = [
-      ['clickEnabledLast', () => { const b = collectSendButtons().filter((x) => !(x as HTMLButtonElement).disabled); const t = b[b.length - 1]; if (t) t.click(); }],
+      // 1) 优先精确/最右的已启用发送按钮
+      ['clickEnabledTop', () => { const b = collectSendButtons().filter((x) => !(x as HTMLButtonElement).disabled); const t = b[0]; if (t) t.click(); }],
+      // 2) 输入框回车兜底
       ['enter', () => { const e = findVisibleInput(); if (e) { e.focus(); fireEnter(e); } }],
-      ['clickEnabledFirst', () => { const b = collectSendButtons().filter((x) => !(x as HTMLButtonElement).disabled); if (b[0]) b[0].click(); }],
-      ['clickForceLast', () => { const b = collectSendButtons(); const t = b[b.length - 1]; if (t) t.click(); }],
-      ['refocusEnter', () => { const e = findVisibleInput(); if (e) { e.blur(); e.focus(); fireEnter(e); } }],
-      ['clickSvgBtn', () => {
-        const e = findVisibleInput(); if (!e) return;
-        let cont: HTMLElement | null = e;
-        for (let i = 0; i < 6 && cont; i++) { cont = cont.parentElement; if (cont && cont.querySelector('button svg, button [class*="icon"]')) break; }
-        const btn = cont ? ([...cont.querySelectorAll('button')].filter(isVisible) as HTMLElement[]).pop() : null;
-        if (btn) btn.click();
-      }],
-      ['forceEnableClick', () => {
+      // 3) 强制点击最右候选（即使 disabled 也临时启用）
+      ['forceEnableTop', () => {
         const b = collectSendButtons();
-        const t = b[b.length - 1] as HTMLButtonElement | undefined;
+        const t = b[0] as HTMLButtonElement | undefined;
         if (!t) return;
         const was = t.disabled;
         t.disabled = false;
@@ -272,6 +289,16 @@ export class DoubaoAdapter extends BaseAdapter {
         t.click();
         t.disabled = was;
       }],
+      // 4) 同容器里第一个带 svg 的按钮
+      ['clickSvgBtn', () => {
+        const e = findVisibleInput(); if (!e) return;
+        let cont: HTMLElement | null = e;
+        for (let i = 0; i < 7 && cont; i++) { cont = cont.parentElement; if (cont && cont.querySelectorAll('button').length >= 1) break; }
+        const btns = cont ? ([...cont.querySelectorAll('button')].filter((b) => isVisible(b) && isSendButton(b as HTMLElement) && !!(b as HTMLElement).querySelector('svg')) as HTMLElement[]) : [];
+        if (btns[0]) btns[0].click();
+      }],
+      // 5) 重写并 Enter 兜底
+      ['refocusEnter', () => { const e = findVisibleInput(); if (e) { e.blur(); e.focus(); fireEnter(e); } }],
     ];
 
     for (const [name, fn] of strategies) {
