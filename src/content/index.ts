@@ -8,8 +8,43 @@ const currentProvider: ProviderName | null = getProviderFromUrl(location.href);
 
 console.log('[MultiAI:content] Content script loaded on', location.hostname, 'provider=', currentProvider);
 
+// 记录当前任务 id，用于把网页地址变化回传给 background（网页视图定位原网页）
+let currentEmbedTaskId: string | undefined;
+
+function reportUrl(): void {
+  if (!currentEmbedTaskId || !currentProvider) return;
+  const url = location.href;
+  if (!url || url.startsWith('about:')) return;
+  try {
+    chrome.runtime.sendMessage({ type: 'EMBED_URL', taskId: currentEmbedTaskId, provider: currentProvider, url });
+  } catch {
+    /* 扩展可能正被重载 */
+  }
+}
+
+// 监听 SPA 路由变化（地址栏 URL 改变）
+(() => {
+  const patch = (m: 'pushState' | 'replaceState') => {
+    const orig = history[m];
+    const wrapper = function (this: History, ...args: unknown[]) {
+      const r = (orig as (...a: unknown[]) => unknown).apply(this, args);
+      reportUrl();
+      return r;
+    };
+    (history as unknown as Record<string, unknown>)[m] = wrapper;
+  };
+  patch('pushState');
+  patch('replaceState');
+  window.addEventListener('popstate', reportUrl);
+  window.addEventListener('hashchange', reportUrl);
+  window.addEventListener('load', reportUrl);
+  // 初次也报一次
+  reportUrl();
+})();
+
 function runExecute(msg: ExecutePromptMessage): void {
   const execMsg = msg;
+  currentEmbedTaskId = execMsg.taskId;
   const sendStatus = (status: string, detail?: string) => {
     chrome.runtime.sendMessage({
       type: 'PROVIDER_STATUS',

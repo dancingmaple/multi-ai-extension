@@ -16,6 +16,7 @@ export interface ProviderTaskState {
   content: string;
   error?: string;
   updatedAt: number;
+  url?: string; // 网页视图中该 AI 原生回复页的最终地址（便于回看定位）
 }
 
 export interface AskTaskState {
@@ -42,6 +43,7 @@ export interface Answer {
   method?: AnswerMethod;
   error?: string;
   finishedAt: number;
+  url?: string; // 该 AI 原生回复页地址（网页视图中记录，便于回看定位）
 }
 
 /** 沉淀态：一轮 */
@@ -238,11 +240,19 @@ export type TaskErrorMessage = {
   errorMessage: string;
 };
 
+export type EmbedUrlMessage = {
+  type: 'EMBED_URL';
+  taskId: string;
+  provider: ProviderName;
+  url: string;
+};
+
 export type ContentToBackgroundMessage =
   | ProviderStatusMessage
   | StreamUpdateMessage
   | TaskDoneMessage
-  | TaskErrorMessage;
+  | TaskErrorMessage
+  | EmbedUrlMessage;
 
 // ── Settings ───────────────────────────────────────────
 

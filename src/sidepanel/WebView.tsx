@@ -49,12 +49,17 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
     );
   }, [conversation, selectedTurnId]);
 
-  const providers: ProviderName[] = React.useMemo(() => {
-    const base = turn ? turn.targets : selectedProviders;
-    return ALL_PROVIDERS.filter((p) => base.includes(p));
-  }, [turn, selectedProviders]);
+  // 网页视图的 iframe 列直接跟随勾选，状态跟随当前 embed 任务
+  const providers: ProviderName[] = React.useMemo(
+    () => ALL_PROVIDERS.filter((p) => selectedProviders.includes(p)),
+    [selectedProviders]
+  );
 
-  const liveTask = task && turn && task.taskId === turn.id ? task : undefined;
+  const liveTask = React.useMemo(() => {
+    if (!task) return undefined;
+    const id = embedSend?.turnId ?? turn?.id;
+    return id && task.taskId === id ? task : undefined;
+  }, [task, embedSend, turn]);
 
   const postTo = useCallback((provider: ProviderName, prompt: string, taskId: string) => {
     const frame = frameRefs.current[provider];
@@ -167,7 +172,8 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
   };
 
   const openInTab = (provider: ProviderName) => {
-    chrome.tabs.create({ url: PROVIDER_URLS[provider], active: true }).catch(() => {});
+    const url = liveTask?.providers[provider]?.url ?? PROVIDER_URLS[provider];
+    chrome.tabs.create({ url, active: true }).catch(() => {});
   };
 
   const reload = (provider: ProviderName) => {

@@ -52,6 +52,16 @@ const AnswerModal: React.FC = () => {
 
   if (!reader.open || !provider) return null;
 
+  // 定位该 AI 原生回复页（对话记录里记录的地址）
+  const sourceUrl: string | undefined = (() => {
+    if (reader.turnId && conversation) {
+      const turn = conversation.turns.find((t) => t.id === reader.turnId);
+      const a = turn?.answers[provider];
+      if (a?.url) return a.url;
+    }
+    return task?.providers[provider]?.url;
+  })();
+
   const html = renderMarkdown(content);
 
   const onContextMenu = (e: React.MouseEvent) => e.preventDefault();
@@ -141,6 +151,23 @@ const AnswerModal: React.FC = () => {
             disabled={!content}
           >
             复制
+          </button>
+          {sourceUrl && (
+            <button
+              className={styles.copyBtn}
+              onClick={() => chrome.tabs.create({ url: sourceUrl, active: true }).catch(() => {})}
+              title="打开该 AI 的原生回复页"
+            >
+              原网页 ↗
+            </button>
+          )}
+          <button
+            className={styles.copyBtn}
+            onClick={() => useStore.getState().exportMd('by-turn', 'download').catch(() => {})}
+            disabled={!useStore.getState().conversationId}
+            title="导出本轮对话为 Markdown"
+          >
+            导出 ⤓
           </button>
         </div>
       </div>

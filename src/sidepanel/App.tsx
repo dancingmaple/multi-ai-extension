@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useStore } from './store';
-import { PromptInput, StatusBar, HistoryBar, HistoryList, SettingsPanel, ProviderTabs, ResponseView } from './components';
+import { PromptInput, StatusBar, HistoryBar, HistoryList, SettingsPanel } from './components';
 import AnswerModal from './components/AnswerModal';
 import Fullscreen from './Fullscreen';
 import WebView from './WebView';
@@ -26,8 +26,6 @@ const App: React.FC = () => {
   const exportMd = useStore((s) => s.exportMd);
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
-  const viewMode = useStore((s) => s.viewMode);
-  const setViewMode = useStore((s) => s.setViewMode);
   const [exportOpen, setExportOpen] = useState(false);
   const exportRef = useRef<HTMLDivElement>(null);
 
@@ -73,12 +71,6 @@ const App: React.FC = () => {
     chrome.storage.local.get('theme').then((r: { theme?: string }) => {
       if (r.theme === 'light' || r.theme === 'dark' || r.theme === 'auto') {
         useStore.setState({ theme: r.theme });
-      }
-    });
-    // 读取已保存的视图模式
-    chrome.storage.local.get('viewMode').then((r: { viewMode?: string }) => {
-      if (r.viewMode === 'web' || r.viewMode === 'compare') {
-        useStore.setState({ viewMode: r.viewMode });
       }
     });
     // 全页面模式打开时拉取当前会话
@@ -164,16 +156,9 @@ const App: React.FC = () => {
                 ⚙
               </button>
               <button
-                className={styles.iconBtn}
-                onClick={() => setViewMode(viewMode === 'web' ? 'compare' : 'web')}
-                title={viewMode === 'web' ? '切换到对比卡片视图' : '切换到网页视图（把 AI 网页嵌入插件）'}
-              >
-                {viewMode === 'web' ? '▦' : '🌐'}
-              </button>
-              <button
                 className={styles.modeBtn}
                 onClick={switchPanelMode}
-                title="Switch to Fullscreen"
+                title="切换到全屏页（网页视图）"
               >
                 ⛶
               </button>
@@ -181,14 +166,7 @@ const App: React.FC = () => {
           </div>
           <PromptInput />
           <StatusBar />
-          {viewMode === 'web' ? (
-            <WebView layout="stack" />
-          ) : (
-            <>
-              <ProviderTabs />
-              <ResponseView />
-            </>
-          )}
+          <WebView layout="stack" />
           <HistoryBar />
           {showHistoryList && <HistoryList />}
           {showSettings && <SettingsPanel />}

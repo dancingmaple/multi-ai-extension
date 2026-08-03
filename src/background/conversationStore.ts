@@ -201,6 +201,7 @@ export function sedimentTask(taskId: string, task: AskTaskState): Conversation |
       method: 'stream',
       error: ps.error,
       finishedAt: ps.updatedAt,
+      url: ps.url,
     };
     c.threads = {
       ...c.threads,

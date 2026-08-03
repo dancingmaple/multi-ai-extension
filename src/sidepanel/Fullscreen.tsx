@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from './store';
 import { ALL_PROVIDERS, PROVIDER_LABELS } from '../shared/constants';
-import type { ProviderName, Turn, Answer, Conversation } from '../shared/types';
+import type { Turn, Conversation } from '../shared/types';
 import WebView from './WebView';
 import styles from './Fullscreen.module.css';
 
@@ -9,57 +9,6 @@ const fmtTime = (ts: number): string => {
   const d = new Date(ts);
   const p = (n: number) => String(n).padStart(2, '0');
   return `${p(d.getHours())}:${p(d.getMinutes())}`;
-};
-
-const ProviderCard: React.FC<{
-  provider: ProviderName;
-  content: string;
-  status: string;
-  answer?: Answer;
-  onCopy: () => void;
-  onManual: () => void;
-  onRetry: () => void;
-  onRead: () => void;
-}> = ({ provider, content, status, answer, onCopy, onManual, onRetry, onRead }) => {
-  const isStreaming = status === 'streaming' || status === 'sending' || status === 'waiting';
-  const isError = status === 'error' || status === 'login_required';
-  return (
-    <div className={`${styles.card} ${isError ? styles.cardError : ''}`}>
-      <div className={styles.cardHead}>
-        <span className={styles.cardName}>{PROVIDER_LABELS[provider]}</span>
-        <span className={`${styles.dot} ${styles['dot_' + (isError ? 'err' : isStreaming ? 'live' : 'done')]}`} />
-      </div>
-      <div className={styles.cardBody}>
-        {content ? (
-          <pre className={styles.pre}>{content}</pre>
-        ) : isStreaming ? (
-          <div className={styles.empty}>思考中…</div>
-        ) : (
-          <div className={styles.empty}>（本轮未取得回答）</div>
-        )}
-        {isStreaming && <span className={styles.cursor}>|</span>}
-      </div>
-      <div className={styles.cardFoot}>
-        <button className={styles.miniBtn} onClick={onCopy} disabled={!content}>
-          复制
-        </button>
-        <button className={styles.miniBtn} onClick={onRead} disabled={!content}>
-          阅读 ⤢
-        </button>
-        {answer?.source === 'manual' && <span className={styles.tagManual}>手动补录</span>}
-        {isError && (
-          <button className={styles.miniBtn} onClick={onRetry}>
-            ↻ 重试
-          </button>
-        )}
-        {(status !== 'done' || !answer) && !isError && (
-          <button className={styles.miniBtn} onClick={onManual}>
-            📥 手动抓取
-          </button>
-        )}
-      </div>
-    </div>
-  );
 };
 
 const THEME_ICON: Record<string, string> = { light: '☀', dark: '🌙', auto: '🌗' };
@@ -82,19 +31,14 @@ const Fullscreen: React.FC = () => {
   const renameCurrent = useStore((s) => s.renameCurrent);
   const deleteCurrent = useStore((s) => s.deleteCurrent);
   const selectTurn = useStore((s) => s.selectTurn);
-  const sendTurn = useStore((s) => s.sendTurn);
-  const manualGrabProvider = useStore((s) => s.manualGrabProvider);
-  const retryProvider = useStore((s) => s.retryProvider);
-  const manualGrabAllTurn = useStore((s) => s.manualGrabAllTurn);
   const exportMd = useStore((s) => s.exportMd);
   const switchPanelMode = useStore((s) => s.switchPanelMode);
   const listConversationsAction = useStore((s) => s.listConversationsAction);
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
   const openReader = useStore((s) => s.openReader);
-  const viewMode = useStore((s) => s.viewMode);
-  const setViewMode = useStore((s) => s.setViewMode);
   const sendEmbed = useStore((s) => s.sendEmbed);
+  const embedSend = useStore((s) => s.embedSend);
 
   const [drawer, setDrawer] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
@@ -108,24 +52,37 @@ const Fullscreen: React.FC = () => {
     return conversation.turns.find((t) => t.id === selectedTurnId) ?? conversation.turns[conversation.turns.length - 1];
   }, [conversation, selectedTurnId]);
 
-  const columns: ProviderName[] = useMemo(() => {
-    if (!turn) return [];
-    const fromTargets = turn.targets.filter((p) => ALL_PROVIDERS.includes(p));
-    const fromAnswers = Object.keys(turn.answers) as ProviderName[];
-    const set = new Set<ProviderName>([...fromTargets, ...fromAnswers]);
-    return ALL_PROVIDERS.filter((p) => set.has(p));
-  }, [turn]);
-
   const liveTask = task && turn && task.taskId === turn.id ? task : undefined;
+  // 一键获取并查看：发送后全部完成时自动弹出阅读器
+  const pendingAutoOpen = useRef<string | null>(null);
 
   const handleSend = () => {
-    if (viewMode === 'web') {
-      sendEmbed(prompt, selectedProviders);
-    } else {
-      sendTurn(prompt, selectedProviders);
-    }
+    if (!prompt.trim() || selectedProviders.length === 0) return;
+    sendEmbed(prompt, selectedProviders);
     setPrompt('');
   };
+
+  // 记录本轮 turnId，等待自动打开阅读器
+  useEffect(() => {
+    if (embedSend) pendingAutoOpen.current = embedSend.turnId;
+  }, [embedSend]);
+
+  // 本轮全部 settle 后自动打开弹窗
+  useEffect(() => {
+    if (!pendingAutoOpen.current || !liveTask) return;
+    if (liveTask.taskId !== pendingAutoOpen.current) return;
+    const targets = embedSend?.targets ?? [];
+    if (targets.length === 0) return;
+    const settled = targets.every((p) => {
+      const s = liveTask.providers[p]?.status;
+      return s === 'done' || s === 'error' || s === 'login_required';
+    });
+    if (settled) {
+      const cols = targets.filter((p) => ALL_PROVIDERS.includes(p));
+      openReader(cols, 0, liveTask.taskId);
+      pendingAutoOpen.current = null;
+    }
+  }, [liveTask, embedSend, openReader]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
@@ -157,13 +114,6 @@ const Fullscreen: React.FC = () => {
         </button>
         <button className={styles.iconBtn} onClick={() => newConversation()} title="新会话">
           ＋
-        </button>
-        <button
-          className={styles.iconBtn}
-          onClick={() => setViewMode(viewMode === 'web' ? 'compare' : 'web')}
-          title={viewMode === 'web' ? '切换到对比卡片视图' : '切换到网页视图（把 AI 网页嵌入插件）'}
-        >
-          {viewMode === 'web' ? '▦ 对比' : '🌐 网页'}
         </button>
         <button
           className={styles.iconBtn}
@@ -203,45 +153,9 @@ const Fullscreen: React.FC = () => {
           )}
         </aside>
 
-        {/* 对照区 */}
+        {/* 对照区：网页视图常驻 */}
         <main className={styles.compare}>
-          {viewMode === 'web' ? (
-            <WebView layout="columns" />
-          ) : turn ? (
-            <>
-              <div className={styles.compareHead}>
-                <span className={styles.turnLabel}>轮 {conversation!.turns.indexOf(turn) + 1} · {turn.prompt}</span>
-                <button className={styles.btn} onClick={() => manualGrabAllTurn()} disabled={isLoading}>
-                  📥 全部手动抓取
-                </button>
-              </div>
-              <div
-                className={styles.grid}
-                style={{ gridTemplateColumns: `repeat(${Math.max(columns.length, 1)}, minmax(0, 1fr))` }}
-              >
-                {columns.map((p) => {
-                  const live = liveTask?.providers[p];
-                  const content = live?.content ?? turn.answers[p]?.content ?? '';
-                  const status = live?.status ?? turn.answers[p]?.status ?? 'idle';
-                  return (
-                    <ProviderCard
-                      key={p}
-                      provider={p}
-                      content={content}
-                      status={status}
-                      answer={turn.answers[p]}
-                      onCopy={() => navigator.clipboard.writeText(content).catch(() => {})}
-                      onManual={() => manualGrabProvider(p)}
-                      onRetry={() => retryProvider(p)}
-                      onRead={() => openReader(columns, columns.indexOf(p), turn?.id)}
-                    />
-                  );
-                })}
-              </div>
-            </>
-          ) : (
-            <div className={styles.emptyCenter}>在下方输入框发起第一个问题，各家回答会并排展示在这里。</div>
-          )}
+          <WebView layout="columns" />
         </main>
       </div>
 
@@ -265,7 +179,7 @@ const Fullscreen: React.FC = () => {
             ))}
           </div>
           <button className={styles.sendBtn} onClick={handleSend} disabled={isLoading || !prompt.trim() || selectedProviders.length === 0}>
-            {isLoading ? '生成中…' : '发送 ▶'}
+            {isLoading ? '获取中…' : '一键获取并查看 ▶'}
           </button>
         </div>
       </footer>

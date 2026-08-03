@@ -15,6 +15,7 @@ import {
   finishProviderTask,
   failProviderTask,
   setProviderTabId,
+  updateProviderUrl,
   loadLastTask,
 } from './stateStore';
 import { getOrCreateProviderTab } from './tabManager';
@@ -131,7 +132,7 @@ const UI_TYPES = new Set([
   'RESUME',
   'KA',
 ]);
-const CONTENT_TYPES = new Set(['PROVIDER_STATUS', 'STREAM_UPDATE', 'TASK_DONE', 'TASK_ERROR']);
+const CONTENT_TYPES = new Set(['PROVIDER_STATUS', 'STREAM_UPDATE', 'TASK_DONE', 'TASK_ERROR', 'EMBED_URL']);
 
 // 双形态入口（§4）：工具栏点击默认打开「侧边栏」；
 // 「全屏页」由侧边栏内的 ⛶ 按钮（SWITCH_MODE target=fullscreen）打开。
@@ -348,6 +349,13 @@ function handleContentMessage(msg: Record<string, unknown>): void {
     case 'TASK_ERROR':
       updatedTask = failProviderTask(taskId, provider, msg.errorMessage as string);
       break;
+    case 'EMBED_URL': {
+      const url = msg.url as string | undefined;
+      if (url) {
+        updatedTask = updateProviderUrl(taskId, provider, url);
+      }
+      break;
+    }
   }
 
   if (updatedTask) {
