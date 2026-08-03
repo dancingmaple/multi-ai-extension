@@ -16,24 +16,31 @@ import { SubmitFailedError } from '../../shared/utils';
 console.log('[Kimi:adapter] build=robust-v2 2026-08-03');
 
 const SUBMIT_SELECTORS = [
-  '.send-button-container',
+  '.send-icon.iconify',
+  'svg.send-icon',
+  'button.send-button',
+  '.action-send',
   '.send-button',
+  '.send-button-container button',
   'button[aria-label*="send" i]',
   'button[aria-label*="发送"]',
   'button[data-testid*="send" i]',
   'button[class*="send" i]',
   'button[type="submit"]',
-  'form button',
+  'form button[type="submit"]',
 ];
 
 const INPUT_SELECTORS = [
   '.chat-input-editor',
   '[data-testid="msh-chatinput-editor"]',
+  'textarea.chat-input',
   '.chat-input [contenteditable="true"]',
   'div.chat-input[contenteditable="true"]',
   '.chat-input textarea',
   '.input-box textarea',
   '.input-box [contenteditable="true"]',
+  '[contenteditable="true"][data-testid*="input" i]',
+  '[contenteditable="true"][data-testid*="editor" i]',
   'textarea[placeholder*="问" i]',
   'textarea[placeholder*="Ask" i]',
   'textarea[placeholder*="kimi" i]',
@@ -66,12 +73,38 @@ function findVisibleInput(): HTMLElement | null {
   }
   return null;
 }
+
+// 把任意匹配到的元素（可能是 SVG 图标、容器 div）解析成真正可点击的按钮：
+// 若是 button/a/[role=button] 直接用；否则向上找最近的这类祖先。找不到返回 null。
+function resolveClickable(el: Element | null): HTMLElement | null {
+  if (!el) return null;
+  if (el instanceof HTMLButtonElement || el instanceof HTMLAnchorElement) return el;
+  if (el.getAttribute('role') === 'button') return el as HTMLElement;
+  const btn = el.closest('button, a, [role="button"]') as HTMLElement | null;
+  return btn && isVisible(btn) ? btn : null;
+}
 function writeExec(el: HTMLElement, value: string): void {
   el.focus();
   try {
     document.execCommand('selectAll', false);
     document.execCommand('insertText', false, value);
   } catch { /* noop */ }
+  el.dispatchEvent(new InputEvent('input', { bubbles: true, data: value, inputType: 'insertText' }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+// 最原生的 contenteditable 写入：用 Selection/Range 真正插入文本节点并触发 input 事件，
+// 这对很多基于 React 的编辑器比设置 textContent 更可靠。
+function writeRange(el: HTMLElement, value: string): void {
+  el.focus();
+  const sel = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false);
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+  range.deleteContents();
+  range.insertNode(document.createTextNode(value));
   el.dispatchEvent(new InputEvent('input', { bubbles: true, data: value, inputType: 'insertText' }));
   el.dispatchEvent(new Event('change', { bubbles: true }));
 }
@@ -125,6 +158,7 @@ export class KimiAdapter extends BaseAdapter {
     let ok = false;
     const writers: Array<() => void> = [
       () => writeExec(el, prompt),
+      () => writeRange(el, prompt),
       () => {
         el.focus();
         if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
@@ -151,6 +185,9 @@ export class KimiAdapter extends BaseAdapter {
       await new Promise((r) => setTimeout(r, 150));
       if (writeOk(el, prompt)) { ok = true; break; }
     }
+    if (!ok) {
+      throw new SubmitFailedError(this.provider, '输入框已找到但文本无法写入（写入后回读失败）');
+    }
 
     el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a', code: 'KeyA' }));
     el.dispatchEvent(new InputEvent('input', { bubbles: true, data: prompt, inputType: 'insertText' }));
@@ -163,21 +200,32 @@ export class KimiAdapter extends BaseAdapter {
   }
 
   override async submit(): Promise<void> {
-    await new Promise((r) => setTimeout(r, 200));
-    const btn = [...document.querySelectorAll(SUBMIT_SELECTORS.join(','))]
-      .filter((b) => isVisible(b) && !(b as HTMLButtonElement).disabled)
-      .pop() as HTMLElement | undefined;
-    if (btn) { btn.click(); console.log('[Kimi:adapter] submit via button'); return; }
+    await new Promise((r) => setTimeout(r, 250));
+
+    // 收集所有候选，解析成真正可点击的按钮，过滤可见且未禁用，按文档顺序取最后一个（最具体的发送钮通常在后）
+    const clickable = [...document.querySelectorAll(SUBMIT_SELECTORS.join(','))]
+      .map((el) => resolveClickable(el))
+      .filter((b): b is HTMLElement => !!b && isVisible(b) && !(b as HTMLButtonElement).disabled);
+
+    if (clickable.length > 0) {
+      const btn = clickable[clickable.length - 1];
+      // 部分发送钮需要先聚焦输入框才会变为可点，这里确保输入框已有内容
+      btn.click();
+      console.log('[Kimi:adapter] submit via button:', btn.outerHTML.slice(0, 80));
+      return;
+    }
+
+    // 兜底：Enter 提交
     const el = findVisibleInput();
     if (el) {
       const init = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true } as KeyboardEventInit;
       el.dispatchEvent(new KeyboardEvent('keydown', init));
       el.dispatchEvent(new KeyboardEvent('keypress', init));
       el.dispatchEvent(new KeyboardEvent('keyup', init));
-      console.log('[Kimi:adapter] submit via Enter');
+      console.log('[Kimi:adapter] submit via Enter fallback');
       return;
     }
-    throw new SubmitFailedError(this.provider, 'no submit button and no input for Enter fallback');
+    throw new SubmitFailedError(this.provider, '找不到可点击的发送按钮，也没有输入框可作 Enter 兜底');
   }
 }
 

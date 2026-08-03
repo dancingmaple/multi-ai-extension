@@ -5,6 +5,7 @@ import type {
   HistoryEntry,
   AppSettings,
   Conversation,
+  Turn,
   ExportLayout,
   ExportSink,
 } from '../shared/types';
@@ -21,6 +22,17 @@ function detectMode(): PanelMode {
     return 'fullscreen';
   }
   return 'sidepanel';
+}
+
+// 从一轮的回答里收集各家已保存的原网页链接（用于切换会话/轮次时让 iframe 跳到当时地址）
+function historyUrlsFromTurn(turn?: Turn): Partial<Record<ProviderName, string>> | undefined {
+  if (!turn) return undefined;
+  const out: Partial<Record<ProviderName, string>> = {};
+  (Object.keys(turn.answers) as ProviderName[]).forEach((p) => {
+    const u = turn.answers[p]?.url;
+    if (u) out[p] = u;
+  });
+  return Object.keys(out).length ? out : undefined;
 }
 
 interface PanelState {
@@ -286,7 +298,14 @@ export const useStore = create<PanelState>((set, get) => ({
       | { type: 'CONVERSATION_UPDATE'; conversation: Conversation }
       | undefined;
     if (res?.conversation) {
-      set({ conversation: res.conversation, conversationId: res.conversation.id, selectedTurnId: undefined });
+      // 新会话：清空历史链接覆盖，iframe 回到各家默认网页（不再停留在上一轮页面）
+      set({
+        conversation: res.conversation,
+        conversationId: res.conversation.id,
+        selectedTurnId: undefined,
+        historyUrls: undefined,
+        viewingHistoryId: undefined,
+      });
     }
   },
 
@@ -295,12 +314,15 @@ export const useStore = create<PanelState>((set, get) => ({
       | { type: 'CONVERSATION_UPDATE'; conversation: Conversation | null }
       | undefined;
     if (res) {
+      const conv = res.conversation ?? undefined;
+      const lastTurn = conv?.turns.length ? conv.turns[conv.turns.length - 1] : undefined;
+      // 切换会话：让各家 iframe 直接打开该会话最后一轮当时保存的链接（无则默认网页）
       set({
-        conversation: res.conversation ?? undefined,
+        conversation: conv,
         conversationId: id,
-        selectedTurnId: res.conversation?.turns.length
-          ? res.conversation.turns[res.conversation.turns.length - 1].id
-          : undefined,
+        selectedTurnId: lastTurn?.id,
+        historyUrls: historyUrlsFromTurn(lastTurn),
+        viewingHistoryId: undefined,
       });
     }
   },
@@ -340,7 +362,12 @@ export const useStore = create<PanelState>((set, get) => ({
     await get().listConversationsAction();
   },
 
-  selectTurn: (id) => set({ selectedTurnId: id }),
+  // 点时间线里的某一轮：让 iframe 跳到该轮当时保存的链接（无则默认网页）
+  selectTurn: (id) =>
+    set((s) => ({
+      selectedTurnId: id,
+      historyUrls: historyUrlsFromTurn(s.conversation?.turns.find((t) => t.id === id)),
+    })),
 
   sendTurn: async (prompt, targets) => {
     const text = prompt.trim();
