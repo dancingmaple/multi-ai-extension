@@ -14,6 +14,9 @@ const manifest: ManifestV3Export = {
     'https://chat.qwen.ai/*',
     'https://chat.z.ai/*',
     'https://www.doubao.com/*',
+    'https://kimi.moonshot.cn/*',
+    'https://*.moonshot.cn/*',
+    'https://kimi.com/*',
   ],
   externally_connectable: {
     matches: [
@@ -39,6 +42,9 @@ const manifest: ManifestV3Export = {
         'https://chat.qwen.ai/*',
         'https://chat.z.ai/*',
         'https://www.doubao.com/*',
+        'https://kimi.moonshot.cn/*',
+        'https://*.moonshot.cn/*',
+        'https://kimi.com/*',
       ],
       js: ['src/content/index.ts'],
       run_at: 'document_idle',

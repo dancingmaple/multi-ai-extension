@@ -11,6 +11,7 @@ const PROVIDER_LINKS: Record<ProviderName, string> = {
   qwen: 'Qwen',
   zai: 'Z.AI',
   doubao: 'Doubao',
+  kimi: 'Kimi',
 };
 
 const HistoryList: React.FC = () => {

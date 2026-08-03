@@ -16,6 +16,7 @@ const DOMAIN_PATTERN: Record<string, string> = {
   qwen: '*://chat.qwen.ai/*',
   zai: '*://chat.z.ai/*',
   doubao: '*://www.doubao.com/*',
+  kimi: '*://*.moonshot.cn/*',
 };
 
 /**
@@ -57,6 +58,7 @@ function grabInPage(args: { prompt: string; provider?: string }): { text: string
       chatgpt: ['[data-testid="conversation-turn-2"]', '.conversation-content', 'main', 'body'],
       deepseek: ['.chat-messages', '.message-list', 'main', 'body'],
       qwen: ['.chat-messages', '.message-list', 'main', 'body'],
+      kimi: ['.chat-content', '.message-list', '.chat-messages', '.conversation-content', 'main[class*="chat"]', 'main'],
     };
     const order = args.provider && providerRoots[args.provider] ? providerRoots[args.provider] : common;
     for (const s of order) {

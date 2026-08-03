@@ -25,6 +25,7 @@ const PROVIDER_ROOTS: Record<string, string[]> = {
   chatgpt: ['[role="presentation"] .flex.flex-col', 'main .flex.flex-col', 'main'],
   deepseek: ['.chat-messages', '.message-list', 'main'],
   qwen: ['.chat-messages', '.message-list', 'main'],
+  kimi: ['.chat-content', '.message-list', '.chat-messages', '.conversation-content', 'main[class*="chat"]', 'main'],
 };
 
 function isVisible(el: Element | null): boolean {

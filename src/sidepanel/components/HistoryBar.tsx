@@ -11,6 +11,7 @@ const PROVIDER_INITIAL: Record<ProviderName, string> = {
   qwen: 'Q',
   zai: 'Z',
   doubao: 'B',
+  kimi: 'K',
 };
 
 const HistoryItem: React.FC<{ entry: HistoryEntry; onDelete: () => void; onClick: () => void }> = ({

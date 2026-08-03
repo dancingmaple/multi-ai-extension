@@ -13,6 +13,7 @@ export function getProviderFromUrl(url: string): ProviderName | null {
   if (hostname.includes('qwen.ai')) return 'qwen';
   if (hostname.includes('z.ai')) return 'zai';
   if (hostname.includes('doubao.com')) return 'doubao';
+  if (hostname.includes('moonshot.cn') || hostname.includes('kimi.com')) return 'kimi';
   return null;
 }
 
@@ -28,7 +29,9 @@ export function getProviderMatchPattern(provider: ProviderName): string {
       return 'https://chat.qwen.ai/*';
     case 'zai':
       return 'https://chat.z.ai/*';
-    case 'doubao':
-      return 'https://www.doubao.com/*';
+  case 'doubao':
+    return 'https://www.doubao.com/*';
+  case 'kimi':
+    return 'https://kimi.moonshot.cn/*';
   }
 }

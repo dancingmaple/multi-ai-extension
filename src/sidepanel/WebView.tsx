@@ -286,6 +286,21 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
     }, GRAB_TIMEOUT_MS);
   };
 
+  // 右上角「一键全部手动获取」：对当前所有可见网页逐个就地读屏并落库
+  const manualGrabAllEmbed = () => {
+    if (!currentPayload) {
+      setToast('还没有可获取的提问，请先在下方输入并发送');
+      return;
+    }
+    if (providers.length === 0) {
+      setToast('请先勾选至少一家 AI');
+      return;
+    }
+    setToast(`已对 ${providers.length} 家 AI 发起手动获取`);
+    setTimeout(() => setToast(undefined), 3000);
+    providers.forEach((p) => manualGrabEmbed(p));
+  };
+
   const readProvider = (provider: ProviderName) => {
     openReader(providers, providers.indexOf(provider), currentPayload?.turnId);
   };
@@ -404,16 +419,26 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
     };
   }, []);
 
-  if (providers.length === 0) {
-    return <div className={styles.empty}>请先在下方勾选至少一家 AI。</div>;
-  }
-
   return (
-    <div
-      ref={containerRef}
-      className={layout === 'columns' ? styles.container : styles.containerStack}
-    >
-      {maxProvider && <div className={styles.maxBackdrop} onClick={() => setMaxProvider(null)} />}
+    <div className={styles.webviewRoot}>
+      <div className={styles.toolbar}>
+        <span className={styles.toolbarInfo}>网页视图 · 已勾选 {providers.length} 家</span>
+        <button
+          className={styles.grabAllBtn}
+          onClick={manualGrabAllEmbed}
+          title="对当前所有可见网页逐个就地读取回答并保存"
+        >
+          📥 一键全部手动获取
+        </button>
+      </div>
+      {providers.length === 0 ? (
+        <div className={styles.empty}>请先在下方勾选至少一家 AI。</div>
+      ) : (
+        <div
+          ref={containerRef}
+          className={layout === 'columns' ? styles.container : styles.containerStack}
+        >
+          {maxProvider && <div className={styles.maxBackdrop} onClick={() => setMaxProvider(null)} />}
 
       {ALL_PROVIDERS.map((provider, i) => {
         if (!providers.includes(provider)) return <React.Fragment key={provider} />;
@@ -548,6 +573,8 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
           </React.Fragment>
         );
       })}
+        </div>
+      )}
     </div>
   );
 };

@@ -7,6 +7,7 @@ export const PROVIDER_URLS: Record<ProviderName, string> = {
   qwen: 'https://chat.qwen.ai/',
   zai: 'https://chat.z.ai/',
   doubao: 'https://www.doubao.com/chat/',
+  kimi: 'https://kimi.moonshot.cn/',
 };
 
 export const PROVIDER_LABELS: Record<ProviderName, string> = {
@@ -16,9 +17,10 @@ export const PROVIDER_LABELS: Record<ProviderName, string> = {
   qwen: 'Qwen',
   zai: 'Z.AI',
   doubao: 'Doubao',
+  kimi: 'Kimi',
 };
 
-export const ALL_PROVIDERS: ProviderName[] = ['chatgpt', 'gemini', 'deepseek', 'qwen', 'zai', 'doubao'];
+export const ALL_PROVIDERS: ProviderName[] = ['chatgpt', 'gemini', 'deepseek', 'qwen', 'zai', 'doubao', 'kimi'];
 
 export const STREAM_THROTTLE_MS = 300;
 export const DONE_STABLE_MS = 250;
@@ -38,6 +40,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     qwen: 45000,
     zai: 45000,
     doubao: 45000,
+    kimi: 60000,
   },
 };
 
@@ -61,6 +64,8 @@ export const EMBED_HOSTS: string[] = [
   'chat.qwen.ai',
   'chat.z.ai',
   'www.doubao.com',
+  'kimi.moonshot.cn',
+  'kimi.com',
 ];
 
 // 父页面（插件）↔ iframe 内 content script 的跨域通信协议
