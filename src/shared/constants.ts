@@ -68,4 +68,9 @@ export const EMBED_MSG = {
   EXECUTE: 'multi_ai_execute',
   PING: 'multi_ai_ping',
   PONG: 'multi_ai_pong',
+  // content script 加载后主动向父页面广播（避免 PING 早于脚本注入的竞态）
+  READY: 'multi_ai_ready',
+  // 嵌入视图的手动抓取：父页面请求 → iframe 内就地读屏 → 回传结果
+  GRAB: 'multi_ai_grab',
+  GRAB_RESULT: 'multi_ai_grab_result',
 } as const;

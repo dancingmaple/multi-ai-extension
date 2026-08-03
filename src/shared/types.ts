@@ -156,6 +156,21 @@ export type ManualGrabAllMessage = {
   prompt: string;
 };
 
+/**
+ * 嵌入视图（iframe）里的手动获取：文本已在 iframe 内读好，这里只请求落库。
+ * iframe 不是标签页，background 无法用 chrome.scripting 注入，故单开一条通路。
+ */
+export type EmbedGrabSaveMessage = {
+  type: 'EMBED_GRAB_SAVE';
+  conversationId: string;
+  turnId: string;
+  provider: ProviderName;
+  prompt: string;
+  text: string;
+  method?: string;
+  url?: string;
+};
+
 // ── 导出（§11） ──────────────────────────────────────
 export type ExportMarkdownMessage = {
   type: 'EXPORT_MARKDOWN';
@@ -188,6 +203,7 @@ export type UIMessage =
   | DeleteConversationMessage
   | ManualGrabMessage
   | ManualGrabAllMessage
+  | EmbedGrabSaveMessage
   | ExportMarkdownMessage
   | ResumeMessage
   | KeepaliveAck;

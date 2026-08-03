@@ -21,8 +21,26 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  position: relative;
   border-right: 1px solid var(--border, #e5e7eb);
   background: var(--panel, #fff);
+}
+
+/* 大屏查看：把该列提升为覆盖全窗的 fixed 层。
+   只改 CSS、不移动 DOM 节点，iframe 因此不会重新加载、登录态与对话不丢。 */
+.columnMax {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  border-right: none;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.28);
+}
+
+.maxBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(15, 23, 42, 0.45);
 }
 
 .containerStack .column {
@@ -113,6 +131,14 @@
   border-bottom: 1px solid #fecaca;
 }
 
+.okTip {
+  padding: 6px 8px;
+  font-size: 12px;
+  color: #065f46;
+  background: #d1fae5;
+  border-bottom: 1px solid #a7f3d0;
+}
+
 .readyBadge {
   font-size: 10px;
   padding: 1px 5px;
@@ -121,6 +147,38 @@
   color: #4b5563;
   white-space: nowrap;
 }
+
+.maxIdx {
+  font-size: 11px;
+  color: var(--text-dim, #6b7280);
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--btn, #eef2ff);
+  white-space: nowrap;
+}
+
+/* 大屏模式下左右切换：浮在 iframe 之上 */
+.swipeBtn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 5;
+  width: 40px;
+  height: 72px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #111;
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+.swipeBtn:hover {
+  background: #fff;
+}
+.swipeL { left: 10px; }
+.swipeR { right: 10px; }
 
 .empty {
   padding: 24px;

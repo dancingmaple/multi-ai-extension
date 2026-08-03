@@ -23,7 +23,7 @@ const DOMAIN_PATTERN: Record<string, string> = {
  * 读整页可见文本 → 用提问当剪刀剪出回答 → 剪不到兜底取页面后半段 →
  * 裁掉头尾元信息 + 页面 footer/免责声明。宁可抓糙，绝不抓空。
  */
-function grabInPage(args: { prompt: string; provider?: string }): { text: string; method: string } {
+function grabInPage(args: { prompt: string; provider?: string }): { text: string; method: string; reason?: string } {
   const HEAD =
     /^(思考了|已思考|思考中|Thought for|Thinking|Reasoned|Reasoning|搜索了|联网搜索|Searching|Searched|Found\s+\d+|阅读了|Read\s+\d+|查看了|引用了|\d+\s*个\s*(网页|来源|结果|web\s*pages?)|DeepThink|Instant|深度思考|联网搜索中|搜索中|生成中)/i;
   const TAIL =
@@ -96,7 +96,16 @@ function grabInPage(args: { prompt: string; provider?: string }): { text: string
   const stopIdx2 = rawHalf.findIndex((l) => STOP.test(l));
   const half = trimHeadTail(stopIdx2 >= 0 ? rawHalf.slice(0, stopIdx2) : rawHalf).join('\n').trim();
   if (half.length > 8) return { text: half, method: 'tail-fallback' };
-  return { text: '', method: 'none' };
+
+  const loggedOut = /(^|\n)\s*(登录|登陆|Sign in|Log in|立即登录|扫码登录)\s*($|\n)/i.test(raw);
+  const reason = !lines.length
+    ? '页面没有可见文本（可能尚未加载完成）'
+    : loggedOut
+      ? '页面疑似未登录（只读到登录入口），请先在该网页登录'
+      : q < 0
+        ? '页面里找不到你这次的提问文本——多半是消息没真正发出去，或页面还没渲染出这一轮对话'
+        : '已定位到提问，但其后没有足量正文——回答可能仍在生成中，稍等再试';
+  return { text: '', method: 'none', reason };
 }
 
 export { grabInPage };
@@ -136,7 +145,11 @@ export async function manualGrab(
       func: grabInPage,
       args: [{ prompt, provider }],
     });
-    const got = res?.[0]?.result || { text: '', method: 'none' };
+    const got = (res?.[0]?.result || { text: '', method: 'none' }) as {
+      text: string;
+      method: string;
+      reason?: string;
+    };
     const text = (got.text || '').trim();
 
     let task = getTask(turnId);
@@ -162,12 +175,50 @@ export async function manualGrab(
       provider,
       ok: !!text,
       method: got.method,
-      error: text ? undefined : '页面当前没有可读取的回答文本',
+      error: text ? undefined : got.reason || '页面当前没有可读取的回答文本',
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { provider, ok: false, error: msg };
   }
+}
+
+/**
+ * 嵌入视图（iframe）专用：文本已由 iframe 内的 content script 就地读出，
+ * 这里只负责落库——写回运行时 Task（卡片变 done）与 Conversation 的对应 Turn。
+ * iframe 不是标签页，走不了 chrome.scripting，所以必须有这条独立通路。
+ */
+export function saveGrabbedText(
+  conversationId: string,
+  turnId: string,
+  provider: ProviderName,
+  prompt: string,
+  rawText: string,
+  method?: string,
+  url?: string
+): GrabOutcome {
+  const text = (rawText || '').trim();
+  if (!text) return { provider, ok: false, error: '没有可保存的文本' };
+
+  if (!getTask(turnId)) createTask(turnId, prompt, [provider]);
+  finishProviderTask(turnId, provider, text);
+  const t2 = getTask(turnId);
+  if (t2) broadcastTaskState({ type: 'TASK_STATE_UPDATE', task: t2 });
+
+  const m: 'scissor' | 'tail-fallback' | 'stream' =
+    method === 'scissor' ? 'scissor' : method === 'tail-fallback' ? 'tail-fallback' : 'stream';
+
+  upsertAnswer(conversationId, turnId, provider, {
+    provider,
+    content: text,
+    status: 'done',
+    source: 'manual',
+    method: m,
+    url,
+    finishedAt: Date.now(),
+  });
+
+  return { provider, ok: true, method: m };
 }
 
 export async function manualGrabAll(

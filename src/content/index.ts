@@ -3,6 +3,7 @@ import type { ExecutePromptMessage, ProviderName } from '../shared/types';
 import { executePrompt } from './executor';
 import { getProviderFromUrl } from '../shared/providers';
 import { EMBED_MSG } from '../shared/constants';
+import { grabLocal } from './grabLocal';
 
 const currentProvider: ProviderName | null = getProviderFromUrl(location.href);
 
@@ -100,28 +101,66 @@ onBackgroundMessage((msg, _sender) => {
 // ── 嵌入视图：插件父页面（Fullscreen / 侧边栏的网页视图）通过 window.postMessage
 // 把任务下发给 iframe 内的 content script。跨域 postMessage 不受同源策略限制。 ──
 if (currentProvider) {
+  const provider = currentProvider;
+
+  const replyTo = (target: Window | null, payload: Record<string, unknown>) => {
+    try {
+      (target ?? window.parent ?? window).postMessage(payload, '*');
+    } catch {
+      /* 父页面可能已关闭 */
+    }
+  };
+
   window.addEventListener('message', (ev: MessageEvent) => {
     const data = ev.data as Record<string, unknown> | null;
     if (!data || typeof data !== 'object') return;
 
     if (data.__multiAi === EMBED_MSG.PING) {
-      const reply = { __multiAi: EMBED_MSG.PONG, provider: currentProvider };
-      if (ev.source && (ev.source as Window).postMessage) {
-        (ev.source as Window).postMessage(reply, '*');
-      } else {
-        (window.parent || window).postMessage(reply, '*');
-      }
+      replyTo(ev.source as Window | null, { __multiAi: EMBED_MSG.PONG, provider });
       return;
     }
 
     if (data.__multiAi === EMBED_MSG.EXECUTE) {
-      const provider = data.provider as ProviderName | undefined;
+      const p = data.provider as ProviderName | undefined;
       const prompt = data.prompt as string | undefined;
       const taskId = data.taskId as string | undefined;
-      if (provider === currentProvider && prompt && taskId) {
-        console.log('[MultiAI:content] postMessage EXECUTE for', provider);
-        runExecute({ type: 'EXECUTE_PROMPT', taskId, provider, prompt });
+      if (p === provider && prompt && taskId) {
+        console.log('[MultiAI:content] postMessage EXECUTE for', p);
+        runExecute({ type: 'EXECUTE_PROMPT', taskId, provider: p, prompt });
       }
+      return;
+    }
+
+    // 嵌入视图的手动获取：就地读屏，把结果（或失败原因）回传父页面
+    if (data.__multiAi === EMBED_MSG.GRAB) {
+      const p = data.provider as ProviderName | undefined;
+      if (p !== provider) return;
+      const prompt = (data.prompt as string | undefined) ?? '';
+      const reqId = data.reqId as string | undefined;
+      let out: { text: string; method: string; reason?: string };
+      try {
+        out = grabLocal(provider, prompt);
+      } catch (e) {
+        out = { text: '', method: 'none', reason: '读屏异常：' + (e instanceof Error ? e.message : String(e)) };
+      }
+      replyTo(ev.source as Window | null, {
+        __multiAi: EMBED_MSG.GRAB_RESULT,
+        provider,
+        reqId,
+        text: out.text,
+        method: out.method,
+        reason: out.reason,
+        url: location.href,
+      });
     }
   });
+
+  // 主动向父页面广播「我已就绪」：避免父页面 PING 早于 content script 注入的竞态
+  // （这正是「第一次发送没反应、第二次才正常」的根因之一）。
+  if (window.parent && window.parent !== window) {
+    const announce = () => replyTo(window.parent, { __multiAi: EMBED_MSG.READY, provider });
+    announce();
+    [200, 600, 1500, 3000, 6000].forEach((t) => setTimeout(announce, t));
+    window.addEventListener('load', announce);
+  }
 }

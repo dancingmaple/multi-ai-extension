@@ -32,7 +32,7 @@ import {
   deleteConversation,
   loadConversations,
 } from './conversationStore';
-import { manualGrab, manualGrabAll } from './manualGrab';
+import { manualGrab, manualGrabAll, saveGrabbedText } from './manualGrab';
 import { buildMarkdown, fileNameFor } from '../shared/exportMarkdown';
 import { ALL_PROVIDERS } from '../shared/constants';
 
@@ -128,6 +128,7 @@ const UI_TYPES = new Set([
   'DELETE_CONVERSATION',
   'MANUAL_GRAB',
   'MANUAL_GRAB_ALL',
+  'EMBED_GRAB_SAVE',
   'EXPORT_MARKDOWN',
   'RESUME',
   'KA',
@@ -318,6 +319,18 @@ export async function handleUIMessage(
         provider: pending[0] ?? 'chatgpt',
         ok: outs.length > 0 && outs.every((o) => o.ok),
       };
+    }
+    case 'EMBED_GRAB_SAVE': {
+      const out = saveGrabbedText(
+        msg.conversationId,
+        msg.turnId,
+        msg.provider,
+        msg.prompt,
+        msg.text,
+        msg.method,
+        msg.url
+      );
+      return { type: 'GRAB_RESULT', ...out };
     }
     case 'EXPORT_MARKDOWN': {
       return await triggerExport(msg);
