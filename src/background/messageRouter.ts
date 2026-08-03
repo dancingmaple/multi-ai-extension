@@ -77,8 +77,10 @@ async function saveToHistory(task: AskTaskState): Promise<void> {
     providers: {} as HistoryEntry['providers'],
   };
   for (const [p, ps] of Object.entries(task.providers)) {
-    let url: string | undefined;
-    if (ps.tabId !== undefined) {
+    // 优先使用 task 上已记录的 url（iframe 嵌入模式由 EMBED_URL 回报写入）；
+    // 若无则尝试从 tabId 反查（标签页模式）。
+    let url: string | undefined = ps.url;
+    if (!url && ps.tabId !== undefined) {
       try {
         const tab = await chrome.tabs.get(ps.tabId);
         url = tab.url;
