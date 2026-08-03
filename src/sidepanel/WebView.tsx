@@ -134,6 +134,22 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
     const onMsg = (ev: MessageEvent) => {
       const data = ev.data as Record<string, unknown> | null;
       if (!data || typeof data !== 'object') return;
+
+      // Kimi 受信任点击桥接：iframe 内的 Kimi 适配器算出发送钮在自身视口内的坐标，
+      // 父窗口把 iframe 在 sidepanel 视口里的偏移加上去，得到绝对坐标，再让 background
+      // 用 chrome.debugger 派发受信任点击（Kimi 只接受 isTrusted 事件）。
+      if (data.__kimiSend === true && data.rect) {
+        const frame = frameRefs.current['kimi'];
+        if (frame) {
+          const fr = frame.getBoundingClientRect();
+          const r = data.rect as { left: number; top: number; width: number; height: number };
+          const x = fr.left + r.left + r.width / 2;
+          const y = fr.top + r.top + r.height / 2;
+          sendToBackground({ type: 'TRUSTED_CLICK', x, y }).catch(() => {});
+        }
+        return;
+      }
+
       const provider = data.provider as ProviderName | undefined;
       if (!provider || !ALL_PROVIDERS.includes(provider)) return;
 

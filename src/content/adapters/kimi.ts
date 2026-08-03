@@ -74,25 +74,6 @@ function findVisibleInput(): HTMLElement | null {
   return null;
 }
 
-// 把任意匹配到的元素（可能是 SVG 图标、容器 div）解析成真正可点击的按钮：
-// 若是 button/a/[role=button] 直接用；否则向上找最近的这类祖先。找不到返回 null。
-function resolveClickable(el: Element | null): HTMLElement | null {
-  if (!el) return null;
-  if (el instanceof HTMLButtonElement || el instanceof HTMLAnchorElement) return el;
-  if (el.getAttribute('role') === 'button') return el as HTMLElement;
-  const btn = el.closest('button, a, [role="button"]') as HTMLElement | null;
-  return btn && isVisible(btn) ? btn : null;
-}
-function writeExec(el: HTMLElement, value: string): void {
-  el.focus();
-  try {
-    document.execCommand('selectAll', false);
-    document.execCommand('insertText', false, value);
-  } catch { /* noop */ }
-  el.dispatchEvent(new InputEvent('input', { bubbles: true, data: value, inputType: 'insertText' }));
-  el.dispatchEvent(new Event('change', { bubbles: true }));
-}
-
 // 最原生的 contenteditable 写入：用 Selection/Range 真正插入文本节点并触发 input 事件，
 // 这对很多基于 React 的编辑器比设置 textContent 更可靠。
 function writeRange(el: HTMLElement, value: string): void {
@@ -157,8 +138,7 @@ export class KimiAdapter extends BaseAdapter {
 
     let ok = false;
     const writers: Array<() => void> = [
-      () => writeExec(el, prompt),
-      () => writeRange(el, prompt),
+      // 首选：直接写 textContent 并派发 React 能识别的 input 事件（实测 Kimi 走这条成功）
       () => {
         el.focus();
         if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
@@ -166,7 +146,7 @@ export class KimiAdapter extends BaseAdapter {
         } else {
           el.textContent = prompt;
         }
-        el.dispatchEvent(new InputEvent('input', { bubbles: true, data: prompt }));
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, data: prompt, inputType: 'insertText' }));
       },
       () => {
         el.focus();
@@ -179,6 +159,8 @@ export class KimiAdapter extends BaseAdapter {
           el.dispatchEvent(new InputEvent('input', { bubbles: true, data: prompt }));
         }
       },
+      // 兜底：Selection/Range 真正插入文本节点（对某些 React 编辑器更稳）
+      () => writeRange(el, prompt),
     ];
     for (const fn of writers) {
       try { fn(); } catch { /* noop */ }
@@ -189,43 +171,39 @@ export class KimiAdapter extends BaseAdapter {
       throw new SubmitFailedError(this.provider, '输入框已找到但文本无法写入（写入后回读失败）');
     }
 
-    el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a', code: 'KeyA' }));
-    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: prompt, inputType: 'insertText' }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-    el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a', code: 'KeyA' }));
-    el.blur();
     el.focus();
-    await new Promise((r) => setTimeout(r, 250));
+    await new Promise((r) => setTimeout(r, 200));
     console.log('[Kimi:adapter] setPrompt', { ok, readBack: readBack(el).length });
   }
 
+  /**
+   * Kimi 的发送按钮是 .send-button-container（一个普通 <div>，React 把 onClick 挂在上边），
+   * 且只接受 isTrusted 的真实用户手势——content script 用 dispatchEvent 派发的事件一律被拒。
+   * 因此这里不能自己 click：写完文本后，把发送钮在 iframe 视口内的坐标告诉父窗口（sidepanel），
+   * 由 background 用 chrome.debugger 派发受信任点击。
+   */
   override async submit(): Promise<void> {
-    await new Promise((r) => setTimeout(r, 250));
+    await new Promise((r) => setTimeout(r, 200));
 
-    // 收集所有候选，解析成真正可点击的按钮，过滤可见且未禁用，按文档顺序取最后一个（最具体的发送钮通常在后）
-    const clickable = [...document.querySelectorAll(SUBMIT_SELECTORS.join(','))]
-      .map((el) => resolveClickable(el))
-      .filter((b): b is HTMLElement => !!b && isVisible(b) && !(b as HTMLButtonElement).disabled);
-
-    if (clickable.length > 0) {
-      const btn = clickable[clickable.length - 1];
-      // 部分发送钮需要先聚焦输入框才会变为可点，这里确保输入框已有内容
-      btn.click();
-      console.log('[Kimi:adapter] submit via button:', btn.outerHTML.slice(0, 80));
-      return;
+    const send = document.querySelector('.send-button-container') as HTMLElement | null;
+    if (!send || !isVisible(send)) {
+      const anySend = [...document.querySelectorAll(SUBMIT_SELECTORS.join(','))].find(isVisible) as HTMLElement | null;
+      if (!anySend) {
+        throw new SubmitFailedError(this.provider, '找不到发送按钮（.send-button-container）');
+      }
+      throw new SubmitFailedError(this.provider, '发送按钮存在但不可见，无法计算坐标发起受信任点击');
     }
 
-    // 兜底：Enter 提交
-    const el = findVisibleInput();
-    if (el) {
-      const init = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true } as KeyboardEventInit;
-      el.dispatchEvent(new KeyboardEvent('keydown', init));
-      el.dispatchEvent(new KeyboardEvent('keypress', init));
-      el.dispatchEvent(new KeyboardEvent('keyup', init));
-      console.log('[Kimi:adapter] submit via Enter fallback');
-      return;
+    const r = send.getBoundingClientRect();
+    const rect = { left: r.left, top: r.top, width: r.width, height: r.height };
+    // 跨域 iframe → 父窗口（sidepanel）的 postMessage 是允许的
+    try {
+      window.parent.postMessage({ __kimiSend: true, rect }, '*');
+      console.log('[Kimi:adapter] submit → 已请求父窗口受信任点击', rect);
+    } catch (e) {
+      throw new SubmitFailedError(this.provider, 'postMessage 给父窗口失败：' + (e instanceof Error ? e.message : String(e)));
     }
-    throw new SubmitFailedError(this.provider, '找不到可点击的发送按钮，也没有输入框可作 Enter 兜底');
+    // 父窗口会算绝对坐标并触发 chrome.debugger 点击；这里无需再等
   }
 }
 

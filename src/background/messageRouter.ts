@@ -33,6 +33,7 @@ import {
   loadConversations,
 } from './conversationStore';
 import { manualGrab, manualGrabAll, saveGrabbedText } from './manualGrab';
+import { trustedClickAt } from './trustedClick';
 import { buildMarkdown, fileNameFor } from '../shared/exportMarkdown';
 import { ALL_PROVIDERS } from '../shared/constants';
 
@@ -134,6 +135,7 @@ const UI_TYPES = new Set([
   'EXPORT_MARKDOWN',
   'RESUME',
   'KA',
+  'TRUSTED_CLICK',
 ]);
 const CONTENT_TYPES = new Set(['PROVIDER_STATUS', 'STREAM_UPDATE', 'TASK_DONE', 'TASK_ERROR', 'EMBED_URL']);
 
@@ -336,6 +338,14 @@ export async function handleUIMessage(
     }
     case 'EXPORT_MARKDOWN': {
       return await triggerExport(msg);
+    }
+    case 'TRUSTED_CLICK': {
+      const tabId = _sender.tab?.id;
+      if (typeof tabId === 'number') {
+        // 受信任点击：坐标由 sidepanel 基于 iframe 在 sidepanel 视口中的位置算出
+        await trustedClickAt(tabId, msg.x as number, msg.y as number);
+      }
+      return { type: 'ACK' };
     }
     case 'RESUME':
     case 'KA':

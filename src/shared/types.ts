@@ -190,6 +190,15 @@ export type KeepaliveAck = {
   type: 'KA';
 };
 
+// 受信任点击：Kimi 等站点只接受 isTrusted 事件，content script 无法派发，
+// 故由 sidepanel 计算出绝对视口坐标后，让 background 用 chrome.debugger 点击。
+// x/y 为相对于 sidepanel 视口的绝对坐标。
+export type TrustedClickMessage = {
+  type: 'TRUSTED_CLICK';
+  x: number;
+  y: number;
+};
+
 export type UIMessage =
   | AskAllMessage
   | GetTaskStateMessage
@@ -206,7 +215,8 @@ export type UIMessage =
   | EmbedGrabSaveMessage
   | ExportMarkdownMessage
   | ResumeMessage
-  | KeepaliveAck;
+  | KeepaliveAck
+  | TrustedClickMessage;
 
 // ── Background → Content ───────────────────────────────
 
