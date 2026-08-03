@@ -69,8 +69,7 @@ const HistoryBar: React.FC = () => {
   const showHistoryList = useStore((s) => s.showHistoryList);
   const setShowHistoryList = useStore((s) => s.setShowHistoryList);
   const deleteHistoryItem = useStore((s) => s.deleteHistoryItem);
-  const sendPrompt = useStore((s) => s.sendPrompt);
-  const setPrompt = useStore((s) => s.setPrompt);
+  const openHistory = useStore((s) => s.openHistory);
   const loadHistory = useStore((s) => s.loadHistory);
   const historyLoaded = useStore((s) => s.history.length > 0 || s.showHistoryList);
 
@@ -85,8 +84,7 @@ const HistoryBar: React.FC = () => {
   if (recent.length === 0 && !showHistoryList) return null;
 
   const handleItemClick = (entry: HistoryEntry) => {
-    setPrompt(entry.prompt);
-    sendPrompt();
+    openHistory(entry);
   };
 
   return (

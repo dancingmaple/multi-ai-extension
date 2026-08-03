@@ -58,6 +58,10 @@ interface PanelState {
   openReader: (providers: ProviderName[], index: number, turnId?: string) => void;
   closeReader: () => void;
   switchReader: (dir: 1 | -1) => void;
+  // ── 切换到历史记录时，iframe 优先打开当时保存的链接；无链接则回退默认网页 ──
+  historyUrls?: Partial<Record<ProviderName, string>>;
+  viewingHistoryId?: string | undefined;
+  openHistory: (entry: HistoryEntry) => void;
 
   setPrompt: (prompt: string) => void;
   toggleProvider: (provider: ProviderName) => void;
@@ -121,6 +125,8 @@ export const useStore = create<PanelState>((set, get) => ({
   reader: { open: false, providers: [], index: 0 },
   viewMode: 'compare',
   webSendNonce: 0,
+  historyUrls: undefined,
+  viewingHistoryId: undefined,
 
   setPrompt: (prompt) => set({ prompt }),
 
@@ -148,7 +154,7 @@ export const useStore = create<PanelState>((set, get) => ({
     const { prompt, selectedProviders } = get();
     if (!prompt.trim() || selectedProviders.length === 0) return;
 
-    set({ toast: `正在向 ${selectedProviders.length} 家 AI 发起请求…` });
+    set({ toast: `正在向 ${selectedProviders.length} 家 AI 发起请求…`, historyUrls: undefined, viewingHistoryId: undefined });
     setTimeout(() => {
       if (get().toast?.startsWith('正在向')) set({ toast: undefined });
     }, 2600);
@@ -350,7 +356,7 @@ export const useStore = create<PanelState>((set, get) => ({
     }
 
     const turnId = generateTaskId();
-    set({ currentTaskId: turnId, selectedTurnId: turnId, isLoading: true, conversationId: convId });
+    set({ currentTaskId: turnId, selectedTurnId: turnId, isLoading: true, conversationId: convId, historyUrls: undefined, viewingHistoryId: undefined });
     set({ toast: `正在向 ${targets.length} 家 AI 发起请求…` });
     setTimeout(() => {
       if (get().toast?.startsWith('正在向')) set({ toast: undefined });
@@ -434,6 +440,22 @@ export const useStore = create<PanelState>((set, get) => ({
     chrome.storage.local.set({ viewMode: m }).catch(() => {});
   },
 
+  // 切换到某条历史记录：把各家当次保存的链接喂给网页视图（有链接打开链接，无则默认网页）
+  openHistory: (entry) => {
+    const overrides: Partial<Record<ProviderName, string>> = {};
+    (Object.keys(entry.providers) as ProviderName[]).forEach((p) => {
+      const u = entry.providers[p]?.url;
+      if (u) overrides[p] = u;
+    });
+    set({
+      prompt: entry.prompt,
+      historyUrls: overrides,
+      viewingHistoryId: entry.id,
+      viewMode: 'web',
+      showHistoryList: false,
+    });
+  },
+
   openReader: (providers, index, turnId) => set({ reader: { open: true, providers, index, turnId } }),
 
   closeReader: () => set((s) => ({ reader: { ...s.reader, open: false } })),
@@ -468,6 +490,8 @@ export const useStore = create<PanelState>((set, get) => ({
       conversationId: convId,
       viewMode: 'web',
       webSendNonce: nonce,
+      historyUrls: undefined,
+      viewingHistoryId: undefined,
       embedSend: { turnId, prompt: text, targets: providers, nonce },
     });
 

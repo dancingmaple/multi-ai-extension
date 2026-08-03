@@ -71,6 +71,9 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
     return id && task.taskId === id ? task : undefined;
   }, [task, embedSend, turn]);
 
+  // 切换到历史记录时，各家优先打开当时保存的链接；没有链接则回退默认网页
+  const historyUrls = useStore((s) => s.historyUrls);
+
   const setNote = useCallback((provider: ProviderName, note?: Note, autoHideMs?: number) => {
     setNotes((m) => ({ ...m, [provider]: note }));
     if (note && autoHideMs) {
@@ -306,7 +309,7 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
   };
 
   const openInTab = (provider: ProviderName) => {
-    const url = liveTask?.providers[provider]?.url ?? PROVIDER_URLS[provider];
+    const url = historyUrls?.[provider] ?? liveTask?.providers[provider]?.url ?? PROVIDER_URLS[provider];
     chrome.tabs.create({ url, active: true }).catch(() => {});
   };
 
@@ -542,7 +545,7 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
                   frameRefs.current[provider] = el;
                 }}
                 className={styles.iframe}
-                src={PROVIDER_URLS[provider]}
+                src={historyUrls?.[provider] ?? liveTask?.providers[provider]?.url ?? PROVIDER_URLS[provider]}
                 title={PROVIDER_LABELS[provider]}
                 onLoad={() => {
                   // 加载完不等于脚本已注入：标记未就绪并 ping，但保留待发队列

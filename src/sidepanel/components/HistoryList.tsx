@@ -22,10 +22,9 @@ const HistoryList: React.FC = () => {
   const setTagFilter = useStore((s) => s.setHistoryTagFilter);
   const setShowHistoryList = useStore((s) => s.setShowHistoryList);
   const deleteHistoryItem = useStore((s) => s.deleteHistoryItem);
-  const sendPrompt = useStore((s) => s.sendPrompt);
-  const setPrompt = useStore((s) => s.setPrompt);
   const addHistoryTag = useStore((s) => s.addHistoryTag);
   const removeHistoryTag = useStore((s) => s.removeHistoryTag);
+  const openHistory = useStore((s) => s.openHistory);
 
   const allTags = useMemo(() => {
     const set = new Set<string>();
@@ -43,9 +42,7 @@ const HistoryList: React.FC = () => {
   }, [history, search, tagFilter]);
 
   const handleItemClick = (entry: HistoryEntry) => {
-    setPrompt(entry.prompt);
-    setShowHistoryList(false);
-    sendPrompt();
+    openHistory(entry);
   };
 
   const handleExport = () => {
