@@ -283,6 +283,7 @@ export interface HistoryEntry {
   id: string;
   prompt: string;
   createdAt: number;
+  tags?: string[];
   providers: Record<ProviderName, {
     status: ProviderStatus;
     content: string;

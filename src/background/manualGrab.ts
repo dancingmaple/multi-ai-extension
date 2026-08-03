@@ -164,12 +164,14 @@ export async function manualGrab(
 
     if (text) {
       const method = got.method === 'scissor' ? 'scissor' : got.method === 'tail-fallback' ? 'tail-fallback' : 'stream';
+      const tab = await chrome.tabs.get(tabId).catch(() => undefined);
       upsertAnswer(conversationId, turnId, provider, {
         provider,
         content: text,
         status: 'done',
         source: 'manual',
         method,
+        url: tab?.url,
         finishedAt: Date.now(),
       });
     }

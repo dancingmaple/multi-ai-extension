@@ -45,7 +45,8 @@ function sectionFor(a: Answer | undefined, p: ProviderName): string {
     return `### ${nameOf(p)}\n\n（本轮未取得回答）\n`;
   }
   const tag = a.source === 'manual' ? '\n\n*（手动补录 · source: manual）*' : '';
-  return `### ${nameOf(p)}\n\n${clean(a.content)}${tag}\n`;
+  const urlLine = a.url ? `\n\n🔗 [原网页链接](${a.url})` : '';
+  return `### ${nameOf(p)}\n\n${clean(a.content)}${tag}${urlLine}\n`;
 }
 
 function byTurn(c: Conversation, provs: ProviderName[]): string {
@@ -73,6 +74,20 @@ function byProvider(c: Conversation, provs: ProviderName[]): string {
     .join('\n');
 }
 
+function linksAppendix(c: Conversation, provs: ProviderName[]): string {
+  const rows: string[] = [];
+  for (const t of c.turns) {
+    for (const p of provs) {
+      const a = t.answers[p];
+      if (a?.url) {
+        rows.push(`- **${nameOf(p)}** · 轮 ${t.index + 1}: [${a.url}](${a.url})`);
+      }
+    }
+  }
+  if (rows.length === 0) return '';
+  return `\n## 原始网页链接汇总\n\n${rows.join('\n')}\n`;
+}
+
 /** 把一段多轮对话拼成 Markdown（§11）。纯函数，便于单测。 */
 export function buildMarkdown(c: Conversation, opt: ExportOptions): string {
   let provs = opt.providers && opt.providers.length > 0 ? opt.providers : [];
@@ -87,5 +102,5 @@ export function buildMarkdown(c: Conversation, opt: ExportOptions): string {
     `> 导出时间：${nowStamp()}  ·  轮数：${c.turns.length}  ·  模型：${provs.map(nameOf).join(', ')}\n` +
     `> 来源：Multi-AI Extension\n\n---\n`;
   const body = opt.layout === 'by-provider' ? byProvider(c, provs) : byTurn(c, provs);
-  return head + body;
+  return head + body + linksAppendix(c, provs);
 }

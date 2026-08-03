@@ -35,6 +35,7 @@ interface PanelState {
   history: HistoryEntry[];
   showHistoryList: boolean;
   historySearch: string;
+  historyTagFilter: string | null;
   settings: AppSettings;
   showSettings: boolean;
   // ── 多轮会话（§2） ──
@@ -70,6 +71,9 @@ interface PanelState {
   loadHistory: () => Promise<void>;
   deleteHistoryItem: (id: string) => Promise<void>;
   setHistorySearch: (query: string) => void;
+  setHistoryTagFilter: (tag: string | null) => void;
+  addHistoryTag: (id: string, tag: string) => Promise<void>;
+  removeHistoryTag: (id: string, tag: string) => Promise<void>;
   setShowHistoryList: (show: boolean) => void;
   loadSettings: () => Promise<void>;
   saveSettings: (settings: AppSettings) => Promise<void>;
@@ -105,6 +109,7 @@ export const useStore = create<PanelState>((set, get) => ({
   history: [],
   showHistoryList: false,
   historySearch: '',
+  historyTagFilter: null,
   settings: { ...DEFAULT_SETTINGS },
   showSettings: false,
   conversationId: undefined,
@@ -217,6 +222,31 @@ export const useStore = create<PanelState>((set, get) => ({
   },
 
   setHistorySearch: (query: string) => set({ historySearch: query }),
+
+  setHistoryTagFilter: (tag: string | null) => set({ historyTagFilter: tag }),
+
+  addHistoryTag: async (id: string, tag: string) => {
+    const t = tag.trim();
+    if (!t) return;
+    const { history } = get();
+    const updated = history.map((h) => {
+      if (h.id !== id) return h;
+      const set = new Set(h.tags || []);
+      set.add(t);
+      return { ...h, tags: [...set] };
+    });
+    set({ history: updated });
+    await chrome.storage.local.set({ [HISTORY_KEY]: updated.slice(0, MAX_HISTORY) });
+  },
+
+  removeHistoryTag: async (id: string, tag: string) => {
+    const { history } = get();
+    const updated = history.map((h) =>
+      h.id === id ? { ...h, tags: (h.tags || []).filter((t) => t !== tag) } : h
+    );
+    set({ history: updated });
+    await chrome.storage.local.set({ [HISTORY_KEY]: updated.slice(0, MAX_HISTORY) });
+  },
 
   setShowHistoryList: (show: boolean) => set({ showHistoryList: show }),
 

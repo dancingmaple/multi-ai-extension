@@ -47,7 +47,7 @@ const manifest: ManifestV3Export = {
         'https://kimi.com/*',
       ],
       js: ['src/content/index.ts'],
-      run_at: 'document_idle',
+      run_at: 'document_end',
       all_frames: true,
     },
   ],
