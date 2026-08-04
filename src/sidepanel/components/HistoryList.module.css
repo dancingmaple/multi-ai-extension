@@ -12,9 +12,9 @@
 .panel {
   background: #fff;
   border-radius: 12px;
-  width: 560px;
-  max-width: 90vw;
-  max-height: 70vh;
+  width: 620px;
+  max-width: 92vw;
+  max-height: 78vh;
   display: flex;
   flex-direction: column;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
@@ -28,6 +28,12 @@
   padding: 12px 16px;
   border-bottom: 1px solid #e5e7eb;
   flex-shrink: 0;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .title {
@@ -48,6 +54,20 @@
 
 .closeBtn:hover {
   color: #374151;
+}
+
+.exportBtn {
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  cursor: pointer;
+  font-size: 12px;
+  color: #374151;
+  padding: 4px 10px;
+  border-radius: 6px;
+}
+
+.exportBtn:hover {
+  background: #f3f4f6;
 }
 
 .searchBar {
@@ -92,6 +112,44 @@
   color: #374151;
 }
 
+.tagBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  flex-shrink: 0;
+  max-height: 84px;
+  overflow-y: auto;
+}
+
+.tagBarLabel {
+  font-size: 12px;
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+.tagChip {
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  color: #4b5563;
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+.tagChip:hover {
+  background: #f3f4f6;
+}
+
+.tagChipActive {
+  background: #dbeafe;
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+
 .list {
   flex: 1;
   overflow-y: auto;
@@ -108,7 +166,7 @@
 .row {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   padding: 10px 12px;
   border: none;
   border-radius: 8px;
@@ -149,6 +207,51 @@
 
 .deleteRowBtn:hover {
   color: #ef4444;
+}
+
+.rowTags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  color: #1d4ed8;
+  background: #dbeafe;
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+.tagRemove {
+  color: #60a5fa;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 1px;
+}
+
+.tagRemove:hover {
+  color: #1d4ed8;
+}
+
+.tagInput {
+  width: 60px;
+  border: 1px dashed #d1d5db;
+  background: transparent;
+  border-radius: 10px;
+  padding: 1px 6px;
+  font-size: 11px;
+  color: #4b5563;
+  outline: none;
+  font-family: inherit;
+}
+
+.tagInput:focus {
+  border-color: #93c5fd;
 }
 
 .rowMeta {

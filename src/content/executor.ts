@@ -6,6 +6,7 @@ import { DeepSeekAdapter } from './adapters/deepseek';
 import { QwenAdapter } from './adapters/qwen';
 import { ZaiAdapter } from './adapters/zai';
 import { DoubaoAdapter } from './adapters/doubao';
+import { KimiAdapter } from './adapters/kimi';
 import { LoginRequiredError } from '../shared/utils';
 import { SETTINGS_KEY, DEFAULT_SETTINGS } from '../shared/constants';
 
@@ -16,6 +17,7 @@ const adapters: Record<ProviderName, SiteAdapter> = {
   qwen: new QwenAdapter(),
   zai: new ZaiAdapter(),
   doubao: new DoubaoAdapter(),
+  kimi: new KimiAdapter(),
 };
 
 let cachedSettings: AppSettings | null = null;

@@ -10,12 +10,18 @@ const PromptInput: React.FC = () => {
   const selectedProviders = useStore((s) => s.selectedProviders);
   const toggleProvider = useStore((s) => s.toggleProvider);
   const sendPrompt = useStore((s) => s.sendPrompt);
+  const sendEmbed = useStore((s) => s.sendEmbed);
+  const viewMode = useStore((s) => s.viewMode);
   const isLoading = useStore((s) => s.isLoading);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const handleSend = useCallback(() => {
-    sendPrompt();
-  }, [sendPrompt]);
+    if (viewMode === 'web') {
+      sendEmbed(prompt, selectedProviders);
+    } else {
+      sendPrompt();
+    }
+  }, [viewMode, sendEmbed, sendPrompt, prompt, selectedProviders]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

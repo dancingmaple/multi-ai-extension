@@ -13,6 +13,8 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    emptyOutDir: true,
+    // 关闭自动清空：本环境 safe-delete 会拦截 dist 目录的 trash 操作，
+    // 导致 vite 的 emptyDir 失败。旧 assets（hash 命名）不被 index.html 引用，可安全残留。
+    emptyOutDir: false,
   },
 });

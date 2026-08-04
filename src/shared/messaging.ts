@@ -4,6 +4,7 @@ import type {
   ContentToBackgroundMessage,
   BackgroundToUIMessage,
   TaskStateUpdateMessage,
+  ConversationUpdateMessage,
 } from './types';
 
 const DEBUG = true;
@@ -50,6 +51,25 @@ export function broadcastTaskState(message: TaskStateUpdateMessage): void {
   log('broadcastTaskState taskId=', message.task.taskId);
   chrome.runtime.sendMessage(message).catch(() => {});
   for (const hook of broadcastHooks) {
+    try { hook(message); } catch { /* 外部端口已断开 */ }
+  }
+}
+
+// ── 会话广播钩子：让 externalBridge 把 CONVERSATION_UPDATE 转发给外部网页 ──
+type ConversationHook = (msg: ConversationUpdateMessage) => void;
+const conversationHooks: ConversationHook[] = [];
+export function onConversationBroadcast(hook: ConversationHook): () => void {
+  conversationHooks.push(hook);
+  return () => {
+    const i = conversationHooks.indexOf(hook);
+    if (i >= 0) conversationHooks.splice(i, 1);
+  };
+}
+
+export function broadcastConversation(message: ConversationUpdateMessage): void {
+  log('broadcastConversation id=', message.conversation?.id);
+  chrome.runtime.sendMessage(message).catch(() => {});
+  for (const hook of conversationHooks) {
     try { hook(message); } catch { /* 外部端口已断开 */ }
   }
 }

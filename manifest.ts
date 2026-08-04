@@ -5,7 +5,7 @@ const manifest: ManifestV3Export = {
   name: 'Multi AI Web Automation',
   version: '1.0.0',
   description: 'Send one prompt to 6 AI web apps and view answers side by side',
-  permissions: ['tabs', 'storage', 'scripting', 'sidePanel', 'webNavigation', 'alarms'],
+  permissions: ['tabs', 'storage', 'scripting', 'sidePanel', 'webNavigation', 'alarms', 'downloads', 'debugger', 'declarativeNetRequestWithHostAccess'],
   host_permissions: [
     'https://chatgpt.com/*',
     'https://gemini.google.com/*',
@@ -14,6 +14,9 @@ const manifest: ManifestV3Export = {
     'https://chat.qwen.ai/*',
     'https://chat.z.ai/*',
     'https://www.doubao.com/*',
+    'https://kimi.moonshot.cn/*',
+    'https://*.moonshot.cn/*',
+    'https://kimi.com/*',
   ],
   externally_connectable: {
     matches: [
@@ -39,9 +42,13 @@ const manifest: ManifestV3Export = {
         'https://chat.qwen.ai/*',
         'https://chat.z.ai/*',
         'https://www.doubao.com/*',
+        'https://kimi.moonshot.cn/*',
+        'https://*.moonshot.cn/*',
+        'https://kimi.com/*',
       ],
       js: ['src/content/index.ts'],
-      run_at: 'document_idle',
+      run_at: 'document_end',
+      all_frames: true,
     },
   ],
   action: {

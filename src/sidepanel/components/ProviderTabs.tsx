@@ -10,10 +10,11 @@ const ProviderTabs: React.FC = () => {
   const activeTab = useStore((s) => s.activeTab);
   const setActiveTab = useStore((s) => s.setActiveTab);
   const selectedProviders = useStore((s) => s.selectedProviders);
+  const openReader = useStore((s) => s.openReader);
 
   return (
     <div className={styles.tabs}>
-      {selectedProviders.map((p: ProviderName) => {
+      {selectedProviders.map((p: ProviderName, idx: number) => {
         const providerState = task?.providers[p];
         const status = providerState?.status ?? 'idle';
         return (
@@ -21,6 +22,8 @@ const ProviderTabs: React.FC = () => {
             key={p}
             className={`${styles.tab} ${activeTab === p ? styles.active : ''}`}
             onClick={() => setActiveTab(p)}
+            onDoubleClick={() => openReader(selectedProviders, idx)}
+            title="单击切换 · 双击大弹窗阅读"
           >
             <span>{PROVIDER_LABELS[p]}</span>
             <StatusBadge status={status} />

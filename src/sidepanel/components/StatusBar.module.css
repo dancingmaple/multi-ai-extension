@@ -5,6 +5,14 @@
   flex-shrink: 0;
 }
 
+.btnWrap {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
 .btn {
   display: flex;
   align-items: center;
@@ -20,6 +28,24 @@
   transition: all 0.2s;
   flex: 1;
   min-width: 0;
+}
+
+.retryBtn {
+  flex-shrink: 0;
+  padding: 0 8px;
+  border-radius: 10px;
+  border: 1px solid #fca5a5;
+  background: #fff1f1;
+  color: #dc2626;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.retryBtn:hover {
+  background: #fee2e2;
+  border-color: #f87171;
 }
 
 .btn:disabled {

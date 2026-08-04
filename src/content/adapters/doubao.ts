@@ -1,6 +1,7 @@
 import type { ProviderName } from '../../shared/types';
 import { BaseAdapter } from './base';
 import { SubmitFailedError } from '../../shared/utils';
+import { extractAnswer } from '../../shared/grab';
 
 /* ============================================================
    豆包适配器 · inner-v2（写入闭环 + 提交闭环）
@@ -36,9 +37,7 @@ const CONFIG = {
   RESPONSE_SELECTORS: ['[data-testid="message-list"]', 'main', 'body'],
   LOGIN_SELECTORS: ['a[href*="/login"]', 'a[href*="/signin"]', 'a[href*="passport"]'],
 
-  /* 抓取相关（与 inner-v1 相同） */
-  HEAD_LINE: /^(思考了|已思考|思考中|Thought for|Thinking|Reasoned|Reasoning|搜索了|联网搜索|Searching|Searched|Found\s+\d+|阅读了|Read\s+\d+|查看了|引用了|\d+\s*个\s*(网页|来源|结果|web\s*pages?)|DeepThink|Instant|深度思考|联网搜索中|搜索中|生成中)/i,
-  TAIL_LINE: /^(复制|点赞|点踩|重新生成|再生成|分享|引用|参考来源|参考|来源|DeepThink|联网搜索|Instant|搜索|给\s*豆包|发消息|发送|Message|⎘||👎|◎|↻)/i,
+  /* 抓取相关 */
   PROGRESS: /(思考中|搜索中|联网搜索中|生成中|正在搜索|正在思考|正在阅读|正在联网|Searching(?! for)|Reading\s+\d)/i,
   PLACEHOLDER_RE: /^[.…·••\s…\u2026\u00b7]*$/,
 
@@ -116,47 +115,76 @@ function writeOk(el: HTMLElement, prompt: string): boolean {
   return got.replace(/\s/g, '').includes(head) || got.length >= Math.max(4, Math.floor(prompt.length * 0.8));
 }
 
-/* 收集发送按钮候选：语义选择器 + 输入框同容器末尾按钮（兜底大招） */
+/* 收集发送按钮候选：精确 > 语义 > 输入框同容器；按页面 x 坐标最右优先，并排除工具菜单 */
+const EXCLUDED_BTN_TEXT_RE = /^(更多|工具|\+)$/;
+function btnScore(btn: HTMLElement): number {
+  // 精确发送按钮最高优先级
+  if (btn.getAttribute('data-testid') === 'chat_input_send_button') return 10000;
+  const rect = btn.getBoundingClientRect();
+  // 有圆形/蓝色发送特征加分；越靠右越好
+  const cls = String(btn.className || '');
+  const isRound = cls.includes('round') || (rect.width > 28 && rect.width === rect.height);
+  const hasSvg = !!btn.querySelector('svg');
+  let score = rect.right;
+  if (hasSvg) score += 500;
+  if (isRound) score += 300;
+  return score;
+}
+function isSendButton(el: HTMLElement): boolean {
+  const text = (el.textContent || '').trim();
+  if (EXCLUDED_BTN_TEXT_RE.test(text)) return false;
+  if (el.getAttribute('data-testid') === 'chat_input_send_button') return true;
+  const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+  if (aria.includes('send') || aria.includes('发送')) return true;
+  return true; // 兜底：只要在同容器且不是"更多"都纳入候选
+}
 function collectSendButtons(): HTMLElement[] {
+  const exact = document.querySelector('button[data-testid="chat_input_send_button"]') as HTMLElement | null;
   const bySel = [...document.querySelectorAll(CONFIG.SUBMIT_SELECTORS.join(','))].filter(isVisible) as HTMLElement[];
   const inputEl = findVisibleInput();
   const byContainer: HTMLElement[] = [];
   if (inputEl) {
     let cont: HTMLElement | null = inputEl;
-    for (let i = 0; i < 6 && cont; i++) {
+    for (let i = 0; i < 7 && cont; i++) {
       cont = cont.parentElement;
       if (cont && cont.querySelectorAll('button').length >= 1) break;
     }
     if (cont) {
-      const inC = [...cont.querySelectorAll('button')].filter(isVisible) as HTMLElement[];
+      const inC = [...cont.querySelectorAll('button')].filter((b) => isVisible(b) && isSendButton(b as HTMLElement)) as HTMLElement[];
       byContainer.push(...inC);
     }
   }
   const seen = new Set<HTMLElement>();
   const out: HTMLElement[] = [];
+  if (exact) { seen.add(exact); out.push(exact); }
   for (const b of bySel.concat(byContainer)) { if (!seen.has(b)) { seen.add(b); out.push(b); } }
-  return out;
+  return out.sort((a, b) => btnScore(b) - btnScore(a));
 }
 
-/* 抓取相关（与 inner-v1 相同） */
-function rootEl(): Element {
-  return document.querySelector('[data-testid="message-list"]') || document.querySelector('main') || document.body;
+/* 抓取：优先从对话主容器取文本，统一用 shared/grab 剪刀法 */
+function rootEl(): HTMLElement {
+  const selectors = [
+    '[data-testid="message-list"]',
+    '.chat-messages',
+    '.message-list',
+    '.chat-content',
+    '.conversation-content',
+    '.conversation-main',
+    'main[class*="chat"]',
+    'main',
+  ];
+  for (const s of selectors) {
+    const el = document.querySelector(s) as HTMLElement | null;
+    if (el && isVisible(el) && el.innerText.trim().length > 20) return el;
+  }
+  return document.body;
 }
 function grabText(): string {
-  const r = rootEl();
-  return ((r && (r as HTMLElement).innerText) || document.body.innerText || '').replace(/\u00a0/g, ' ');
+  return (rootEl().innerText || document.body.innerText || '').replace(/\u00a0/g, ' ');
 }
 function grabLen(): number { return grabText().length; }
-function extractAnswer(text: string, prompt: string): string {
-  const lines = text.split('\n').map((s) => s.replace(/\s+$/, '').replace(/^\s+/, '')).filter((s) => s.length > 0);
-  const key = (prompt || '').replace(/\s/g, '').slice(0, 12);
-  let q = -1;
-  if (key) for (let i = lines.length - 1; i >= 0; i--) { if (lines[i].replace(/\s/g, '').includes(key)) { q = i; break; } }
-  if (q < 0) return '';
-  let body = lines.slice(q + 1);
-  while (body.length && CONFIG.HEAD_LINE.test(body[0])) body.shift();
-  while (body.length && CONFIG.TAIL_LINE.test(body[body.length - 1])) body.pop();
-  return body.join('\n').trim();
+function localExtractAnswer(text: string, prompt: string): string {
+  return extractAnswer(text, prompt).text;
 }
 
 /* ============================================================
@@ -203,11 +231,14 @@ export class DoubaoAdapter extends BaseAdapter {
       await new Promise((r) => setTimeout(r, CONFIG.WRITE_VERIFY_MS));
       if (writeOk(el, prompt)) { ok = true; used = name; break; }
     }
-    // 唤醒发送按钮（豆包"空内容禁用"）
-    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: prompt }));
+    // 唤醒发送按钮（豆包"空内容禁用"）：用完整 keydown→input→change→keyup 序列触发 React 状态
+    el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a', code: 'KeyA' }));
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: prompt, inputType: 'insertText' }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
     el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a', code: 'KeyA' }));
-    await new Promise((r) => setTimeout(r, 300));
+    el.blur();
+    el.focus();
+    await new Promise((r) => setTimeout(r, 400));
 
     log('setPrompt', { ok, used, readBack: readBack(el).length, editable: isEditable(el) });
     if (!ok) log('setPrompt 警告：回读未确认写入，submit 将尝试重写');
@@ -244,18 +275,34 @@ export class DoubaoAdapter extends BaseAdapter {
     };
 
     const strategies: Array<[string, () => void]> = [
-      ['clickEnabledLast', () => { const b = collectSendButtons().filter((x) => !(x as HTMLButtonElement).disabled); const t = b[b.length - 1]; if (t) t.click(); }],
+      // 1) 优先精确/最右的已启用发送按钮
+      ['clickEnabledTop', () => { const b = collectSendButtons().filter((x) => !(x as HTMLButtonElement).disabled); const t = b[0]; if (t) t.click(); }],
+      // 2) 输入框回车兜底
       ['enter', () => { const e = findVisibleInput(); if (e) { e.focus(); fireEnter(e); } }],
-      ['clickEnabledFirst', () => { const b = collectSendButtons().filter((x) => !(x as HTMLButtonElement).disabled); if (b[0]) b[0].click(); }],
-      ['clickForceLast', () => { const b = collectSendButtons(); const t = b[b.length - 1]; if (t) t.click(); }],
-      ['refocusEnter', () => { const e = findVisibleInput(); if (e) { e.blur(); e.focus(); fireEnter(e); } }],
+      // 3) 强制点击最右候选（即使 disabled 也临时启用）
+      ['forceEnableTop', () => {
+        const b = collectSendButtons();
+        const t = b[0] as HTMLButtonElement | undefined;
+        if (!t) return;
+        const was = t.disabled;
+        t.disabled = false;
+        t.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        t.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        t.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+        t.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        t.click();
+        t.disabled = was;
+      }],
+      // 4) 同容器里第一个带 svg 的按钮
       ['clickSvgBtn', () => {
         const e = findVisibleInput(); if (!e) return;
         let cont: HTMLElement | null = e;
-        for (let i = 0; i < 6 && cont; i++) { cont = cont.parentElement; if (cont && cont.querySelector('button svg, button [class*="icon"]')) break; }
-        const btn = cont ? ([...cont.querySelectorAll('button')].filter(isVisible) as HTMLElement[]).pop() : null;
-        if (btn) btn.click();
+        for (let i = 0; i < 7 && cont; i++) { cont = cont.parentElement; if (cont && cont.querySelectorAll('button').length >= 1) break; }
+        const btns = cont ? ([...cont.querySelectorAll('button')].filter((b) => isVisible(b) && isSendButton(b as HTMLElement) && !!(b as HTMLElement).querySelector('svg')) as HTMLElement[]) : [];
+        if (btns[0]) btns[0].click();
       }],
+      // 5) 重写并 Enter 兜底
+      ['refocusEnter', () => { const e = findVisibleInput(); if (e) { e.blur(); e.focus(); fireEnter(e); } }],
     ];
 
     for (const [name, fn] of strategies) {
@@ -289,7 +336,7 @@ export class DoubaoAdapter extends BaseAdapter {
       const now = Date.now();
       const text = grabText();
       if (!started && text.length > gateLen + 12) { started = true; log('GATE OPEN len', text.length, '>', gateLen); }
-      const real = started ? extractAnswer(text, prompt) : '';
+      const real = started ? localExtractAnswer(text, prompt) : '';
       const isPlaceholder = !real || CONFIG.PLACEHOLDER_RE.test(real);
       const body = isPlaceholder ? '' : real;
       const show = body || (started ? CONFIG.THINKING_PLACEHOLDER : '');
@@ -302,14 +349,14 @@ export class DoubaoAdapter extends BaseAdapter {
       log('tick', { started, bodyLen: body.length, hasProgress, stableMs: elapsed, need, done });
       if (done) {
         stopped = true;
-        const final = extractAnswer(grabText(), prompt) || body;
+        const final = localExtractAnswer(grabText(), prompt) || body;
         log('DONE finalLen=', final.length);
         onUpdate(final); onDone(final); cleanup();
         return;
       }
       if (now - t0 >= CONFIG.HARD_TIMEOUT) {
         stopped = true; cleanup();
-        const final = extractAnswer(grabText(), prompt);
+        const final = localExtractAnswer(grabText(), prompt);
         if (final && !CONFIG.PLACEHOLDER_RE.test(final)) { log('HARD_TIMEOUT 有正文'); onDone(final); }
         else { log('HARD_TIMEOUT 无正文'); onError(new Error('StreamTimeoutError: 超时未抓到回答，可点重发')); }
       }

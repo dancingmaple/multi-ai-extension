@@ -1,5 +1,14 @@
 import { create } from 'zustand';
-import type { ProviderName, AskTaskState, HistoryEntry, AppSettings } from '../shared/types';
+import type {
+  ProviderName,
+  AskTaskState,
+  HistoryEntry,
+  AppSettings,
+  Conversation,
+  Turn,
+  ExportLayout,
+  ExportSink,
+} from '../shared/types';
 import { ALL_PROVIDERS, SETTINGS_KEY, DEFAULT_SETTINGS } from '../shared/constants';
 import { sendToBackground, generateTaskId } from '../shared/messaging';
 
@@ -15,6 +24,17 @@ function detectMode(): PanelMode {
   return 'sidepanel';
 }
 
+// 从一轮的回答里收集各家已保存的原网页链接（用于切换会话/轮次时让 iframe 跳到当时地址）
+function historyUrlsFromTurn(turn?: Turn): Partial<Record<ProviderName, string>> | undefined {
+  if (!turn) return undefined;
+  const out: Partial<Record<ProviderName, string>> = {};
+  (Object.keys(turn.answers) as ProviderName[]).forEach((p) => {
+    const u = turn.answers[p]?.url;
+    if (u) out[p] = u;
+  });
+  return Object.keys(out).length ? out : undefined;
+}
+
 interface PanelState {
   currentTaskId: string | undefined;
   prompt: string;
@@ -27,8 +47,33 @@ interface PanelState {
   history: HistoryEntry[];
   showHistoryList: boolean;
   historySearch: string;
+  historyTagFilter: string | null;
   settings: AppSettings;
   showSettings: boolean;
+  // ── 多轮会话（§2） ──
+  conversationId: string | undefined;
+  conversation: Conversation | undefined;
+  selectedTurnId: string | undefined;
+  conversations: Conversation[];
+  toast: string | undefined;
+  // ── 主题（网页风格切换） ──
+  theme: 'light' | 'dark' | 'auto';
+  setTheme: (t: 'light' | 'dark' | 'auto') => void;
+  // ── 视图模式：对比卡片 / 网页视图（iframe 嵌入） ──
+  viewMode: 'compare' | 'web';
+  setViewMode: (m: 'compare' | 'web') => void;
+  webSendNonce: number;
+  // 网页视图当前要发送的载荷（不依赖 conversation 已写入 turn）
+  embedSend?: { turnId: string; prompt: string; targets: ProviderName[]; nonce: number };
+  // ── 大弹窗阅读器 ──
+  reader: { open: boolean; providers: ProviderName[]; index: number; turnId?: string };
+  openReader: (providers: ProviderName[], index: number, turnId?: string) => void;
+  closeReader: () => void;
+  switchReader: (dir: 1 | -1) => void;
+  // ── 切换到历史记录时，iframe 优先打开当时保存的链接；无链接则回退默认网页 ──
+  historyUrls?: Partial<Record<ProviderName, string>>;
+  viewingHistoryId?: string | undefined;
+  openHistory: (entry: HistoryEntry) => void;
 
   setPrompt: (prompt: string) => void;
   toggleProvider: (provider: ProviderName) => void;
@@ -42,10 +87,30 @@ interface PanelState {
   loadHistory: () => Promise<void>;
   deleteHistoryItem: (id: string) => Promise<void>;
   setHistorySearch: (query: string) => void;
+  setHistoryTagFilter: (tag: string | null) => void;
+  addHistoryTag: (id: string, tag: string) => Promise<void>;
+  removeHistoryTag: (id: string, tag: string) => Promise<void>;
   setShowHistoryList: (show: boolean) => void;
   loadSettings: () => Promise<void>;
   saveSettings: (settings: AppSettings) => Promise<void>;
   setShowSettings: (show: boolean) => void;
+  // ── 多轮动作 ──
+  setConversation: (c: Conversation | null) => void;
+  setConversations: (list: Conversation[]) => void;
+  setToast: (msg?: string) => void;
+  newConversation: () => Promise<void>;
+  openConversation: (id: string) => Promise<void>;
+  openCurrentConversation: () => Promise<void>;
+  listConversationsAction: () => Promise<void>;
+  renameCurrent: (title: string) => Promise<void>;
+  deleteCurrent: (id: string) => Promise<void>;
+  selectTurn: (id: string) => void;
+  sendTurn: (prompt: string, targets: ProviderName[]) => Promise<void>;
+  manualGrabProvider: (provider: ProviderName) => Promise<void>;
+  manualGrabAllTurn: () => Promise<void>;
+  exportMd: (layout: ExportLayout, sink: ExportSink, providers?: ProviderName[]) => Promise<void>;
+  // ── 网页视图发送：不打开标签页，由 WebView 把 prompt 发给 iframe ──
+  sendEmbed: (prompt: string, providers: ProviderName[]) => Promise<void>;
 }
 
 export const useStore = create<PanelState>((set, get) => ({
@@ -60,8 +125,20 @@ export const useStore = create<PanelState>((set, get) => ({
   history: [],
   showHistoryList: false,
   historySearch: '',
+  historyTagFilter: null,
   settings: { ...DEFAULT_SETTINGS },
   showSettings: false,
+  conversationId: undefined,
+  conversation: undefined,
+  selectedTurnId: undefined,
+  conversations: [],
+  toast: undefined,
+  theme: 'light',
+  reader: { open: false, providers: [], index: 0 },
+  viewMode: 'compare',
+  webSendNonce: 0,
+  historyUrls: undefined,
+  viewingHistoryId: undefined,
 
   setPrompt: (prompt) => set({ prompt }),
 
@@ -88,6 +165,11 @@ export const useStore = create<PanelState>((set, get) => ({
   sendPrompt: async () => {
     const { prompt, selectedProviders } = get();
     if (!prompt.trim() || selectedProviders.length === 0) return;
+
+    set({ toast: `正在向 ${selectedProviders.length} 家 AI 发起请求…`, historyUrls: undefined, viewingHistoryId: undefined });
+    setTimeout(() => {
+      if (get().toast?.startsWith('正在向')) set({ toast: undefined });
+    }, 2600);
 
     const taskId = generateTaskId();
     set({ currentTaskId: taskId, isLoading: true });
@@ -159,6 +241,31 @@ export const useStore = create<PanelState>((set, get) => ({
 
   setHistorySearch: (query: string) => set({ historySearch: query }),
 
+  setHistoryTagFilter: (tag: string | null) => set({ historyTagFilter: tag }),
+
+  addHistoryTag: async (id: string, tag: string) => {
+    const t = tag.trim();
+    if (!t) return;
+    const { history } = get();
+    const updated = history.map((h) => {
+      if (h.id !== id) return h;
+      const set = new Set(h.tags || []);
+      set.add(t);
+      return { ...h, tags: [...set] };
+    });
+    set({ history: updated });
+    await chrome.storage.local.set({ [HISTORY_KEY]: updated.slice(0, MAX_HISTORY) });
+  },
+
+  removeHistoryTag: async (id: string, tag: string) => {
+    const { history } = get();
+    const updated = history.map((h) =>
+      h.id === id ? { ...h, tags: (h.tags || []).filter((t) => t !== tag) } : h
+    );
+    set({ history: updated });
+    await chrome.storage.local.set({ [HISTORY_KEY]: updated.slice(0, MAX_HISTORY) });
+  },
+
   setShowHistoryList: (show: boolean) => set({ showHistoryList: show }),
 
   loadSettings: async () => {
@@ -173,4 +280,261 @@ export const useStore = create<PanelState>((set, get) => ({
   },
 
   setShowSettings: (show: boolean) => set({ showSettings: show }),
+
+  // ── 多轮会话动作 ──
+  setConversation: (c) =>
+    set({
+      conversation: c ?? undefined,
+      conversationId: c?.id ?? get().conversationId,
+      selectedTurnId: c?.turns.length ? c.turns[c.turns.length - 1].id : get().selectedTurnId,
+    }),
+
+  setConversations: (list) => set({ conversations: list }),
+
+  setToast: (msg) => set({ toast: msg }),
+
+  newConversation: async () => {
+    const res = (await sendToBackground({ type: 'NEW_CONVERSATION' })) as
+      | { type: 'CONVERSATION_UPDATE'; conversation: Conversation }
+      | undefined;
+    if (res?.conversation) {
+      // 新会话：清空历史链接覆盖，iframe 回到各家默认网页（不再停留在上一轮页面）
+      set({
+        conversation: res.conversation,
+        conversationId: res.conversation.id,
+        selectedTurnId: undefined,
+        historyUrls: undefined,
+        viewingHistoryId: undefined,
+      });
+    }
+  },
+
+  openConversation: async (id) => {
+    const res = (await sendToBackground({ type: 'GET_CONVERSATION', conversationId: id })) as
+      | { type: 'CONVERSATION_UPDATE'; conversation: Conversation | null }
+      | undefined;
+    if (res) {
+      const conv = res.conversation ?? undefined;
+      const lastTurn = conv?.turns.length ? conv.turns[conv.turns.length - 1] : undefined;
+      // 切换会话：让各家 iframe 直接打开该会话最后一轮当时保存的链接（无则默认网页）
+      set({
+        conversation: conv,
+        conversationId: id,
+        selectedTurnId: lastTurn?.id,
+        historyUrls: historyUrlsFromTurn(lastTurn),
+        viewingHistoryId: undefined,
+      });
+    }
+  },
+
+  openCurrentConversation: async () => {
+    const res = (await sendToBackground({ type: 'GET_CONVERSATION' })) as
+      | { type: 'CONVERSATION_UPDATE'; conversation: Conversation | null }
+      | undefined;
+    if (res?.conversation) {
+      set({
+        conversation: res.conversation,
+        conversationId: res.conversation.id,
+        selectedTurnId: res.conversation.turns.length
+          ? res.conversation.turns[res.conversation.turns.length - 1].id
+          : undefined,
+      });
+    }
+  },
+
+  listConversationsAction: async () => {
+    const res = (await sendToBackground({ type: 'LIST_CONVERSATIONS' })) as
+      | { type: 'CONVERSATION_LIST'; conversations: Conversation[] }
+      | undefined;
+    if (res) set({ conversations: res.conversations });
+  },
+
+  renameCurrent: async (title) => {
+    if (!get().conversationId) return;
+    await sendToBackground({ type: 'RENAME_CONVERSATION', conversationId: get().conversationId!, title });
+  },
+
+  deleteCurrent: async (id) => {
+    await sendToBackground({ type: 'DELETE_CONVERSATION', conversationId: id });
+    if (get().conversationId === id) {
+      set({ conversation: undefined, conversationId: undefined, selectedTurnId: undefined });
+    }
+    await get().listConversationsAction();
+  },
+
+  // 点时间线里的某一轮：让 iframe 跳到该轮当时保存的链接（无则默认网页）
+  selectTurn: (id) =>
+    set((s) => ({
+      selectedTurnId: id,
+      historyUrls: historyUrlsFromTurn(s.conversation?.turns.find((t) => t.id === id)),
+    })),
+
+  sendTurn: async (prompt, targets) => {
+    const text = prompt.trim();
+    if (!text || targets.length === 0) return;
+
+    let convId = get().conversationId;
+    if (!convId) {
+      const res = (await sendToBackground({ type: 'NEW_CONVERSATION' })) as
+        | { type: 'CONVERSATION_UPDATE'; conversation: Conversation }
+        | undefined;
+      convId = res?.conversation?.id;
+      if (!convId) return;
+    }
+
+    const turnId = generateTaskId();
+    set({ currentTaskId: turnId, selectedTurnId: turnId, isLoading: true, conversationId: convId, historyUrls: undefined, viewingHistoryId: undefined });
+    set({ toast: `正在向 ${targets.length} 家 AI 发起请求…` });
+    setTimeout(() => {
+      if (get().toast?.startsWith('正在向')) set({ toast: undefined });
+    }, 2600);
+
+    const safetyTimer = setTimeout(() => set({ isLoading: false }), 300000);
+    try {
+      await sendToBackground({
+        type: 'APPEND_TURN',
+        conversationId: convId!,
+        turnId,
+        prompt: text,
+        targets,
+      });
+    } catch {
+      set({ isLoading: false });
+      clearTimeout(safetyTimer);
+    }
+  },
+
+  manualGrabProvider: async (provider) => {
+    const { conversationId, selectedTurnId, conversation, prompt } = get();
+    if (!conversationId || !selectedTurnId) return;
+    const turn = conversation?.turns.find((t) => t.id === selectedTurnId);
+    const p = prompt || turn?.prompt || '';
+    const res = (await sendToBackground({
+      type: 'MANUAL_GRAB',
+      conversationId,
+      turnId: selectedTurnId,
+      provider,
+      prompt: p,
+    })) as { type: 'GRAB_RESULT'; ok: boolean; method?: string; error?: string } | undefined;
+    set({
+      toast: res?.ok
+        ? `手动抓取成功（${res.method === 'scissor' ? '精确' : '兜底'}）`
+        : `手动抓取失败：${res?.error ?? ''}`,
+    });
+    setTimeout(() => set({ toast: undefined }), 2600);
+  },
+
+  manualGrabAllTurn: async () => {
+    const { conversationId, selectedTurnId, conversation, prompt } = get();
+    if (!conversationId || !selectedTurnId) return;
+    const turn = conversation?.turns.find((t) => t.id === selectedTurnId);
+    const p = prompt || turn?.prompt || '';
+    set({ isLoading: true });
+    const res = (await sendToBackground({
+      type: 'MANUAL_GRAB_ALL',
+      conversationId,
+      turnId: selectedTurnId,
+      prompt: p,
+    })) as { type: 'GRAB_RESULT'; ok: boolean; error?: string } | undefined;
+    set({
+      isLoading: false,
+      toast: res?.ok ? '全部手动抓取完成' : `批量抓取未全部成功：${res?.error ?? ''}`,
+    });
+    setTimeout(() => set({ toast: undefined }), 2600);
+  },
+
+  exportMd: async (layout, sink, providers) => {
+    const { conversationId } = get();
+    if (!conversationId) return;
+    const res = (await sendToBackground({
+      type: 'EXPORT_MARKDOWN',
+      conversationId,
+      layout,
+      sink,
+      providers,
+    })) as { type: 'EXPORT_RESULT'; ok: boolean; error?: string } | undefined;
+    set({ toast: res?.ok ? '已导出 Markdown' : `导出失败：${res?.error ?? ''}` });
+    setTimeout(() => set({ toast: undefined }), 2600);
+  },
+
+  setTheme: (t) => {
+    set({ theme: t });
+    chrome.storage.local.set({ theme: t }).catch(() => {});
+  },
+
+  setViewMode: (m) => {
+    set({ viewMode: m });
+    chrome.storage.local.set({ viewMode: m }).catch(() => {});
+  },
+
+  // 切换到某条历史记录：把各家当次保存的链接喂给网页视图（有链接打开链接，无则默认网页）
+  openHistory: (entry) => {
+    const overrides: Partial<Record<ProviderName, string>> = {};
+    (Object.keys(entry.providers) as ProviderName[]).forEach((p) => {
+      const u = entry.providers[p]?.url;
+      if (u) overrides[p] = u;
+    });
+    set({
+      prompt: entry.prompt,
+      historyUrls: overrides,
+      viewingHistoryId: entry.id,
+      viewMode: 'web',
+      showHistoryList: false,
+    });
+  },
+
+  openReader: (providers, index, turnId) => set({ reader: { open: true, providers, index, turnId } }),
+
+  closeReader: () => set((s) => ({ reader: { ...s.reader, open: false } })),
+
+  switchReader: (dir) =>
+    set((s) => {
+      const n = s.reader.providers.length;
+      if (n === 0) return {};
+      const index = (s.reader.index + dir + n) % n;
+      return { reader: { ...s.reader, index } };
+    }),
+
+  sendEmbed: async (prompt, providers) => {
+    const text = prompt.trim();
+    if (!text || providers.length === 0) return;
+
+    let convId = get().conversationId;
+    if (!convId) {
+      const res = (await sendToBackground({ type: 'NEW_CONVERSATION' })) as
+        | { type: 'CONVERSATION_UPDATE'; conversation: Conversation }
+        | undefined;
+      convId = res?.conversation?.id;
+      if (!convId) return;
+    }
+
+    const turnId = generateTaskId();
+    const nonce = get().webSendNonce + 1;
+    set({
+      currentTaskId: turnId,
+      selectedTurnId: turnId,
+      isLoading: true,
+      conversationId: convId,
+      viewMode: 'web',
+      webSendNonce: nonce,
+      historyUrls: undefined,
+      viewingHistoryId: undefined,
+      embedSend: { turnId, prompt: text, targets: providers, nonce },
+    });
+
+    const safetyTimer = setTimeout(() => set({ isLoading: false }), 300000);
+    try {
+      await sendToBackground({
+        type: 'APPEND_TURN',
+        conversationId: convId!,
+        turnId,
+        prompt: text,
+        targets: providers,
+        embed: true,
+      });
+    } catch {
+      set({ isLoading: false });
+      clearTimeout(safetyTimer);
+    }
+  },
 }));

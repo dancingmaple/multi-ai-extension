@@ -133,6 +133,25 @@ export function setProviderTabId(
   return updated;
 }
 
+export function updateProviderUrl(
+  taskId: string,
+  provider: ProviderName,
+  url: string
+): AskTaskState | undefined {
+  const task = tasks.get(taskId);
+  if (!task) return;
+  const updated = { ...task };
+  updated.providers = { ...updated.providers };
+  updated.providers[provider] = {
+    ...updated.providers[provider],
+    url,
+    updatedAt: Date.now(),
+  };
+  tasks.set(taskId, updated);
+  persistTask(updated);
+  return updated;
+}
+
 function persistTask(task: AskTaskState): void {
   chrome.storage.local.set({ lastTask: task }).catch(console.error);
 }
