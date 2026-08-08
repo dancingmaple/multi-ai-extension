@@ -29,11 +29,13 @@ export async function runWorkbenchExecution(
     return { ok: false, outputs, errors: { _empty: '未选择任何 AI' } as Partial<Record<ProviderName, string>> };
   }
 
+  console.log('[Workbench:engine] 开始执行', { taskId, providers });
   await handleAskAll(taskId, prompt, providers);
 
   // 取各家超时上限 + 余量作为总等待上限
   const maxPer = Math.max(...providers.map((p) => DEFAULT_SETTINGS.responseTimeoutMs[p] ?? 60000));
   const deadline = Date.now() + maxPer + 8000;
+  const budgetSec = Math.round((maxPer + 8000) / 1000);
 
   while (Date.now() < deadline) {
     const task = getTask(taskId);
@@ -42,9 +44,15 @@ export async function runWorkbenchExecution(
       for (const p of providers) {
         const st = task.providers[p]?.status;
         if (st === 'done') {
-          if (outputs[p] === undefined) outputs[p] = task.providers[p].content;
+          if (outputs[p] === undefined) {
+            outputs[p] = task.providers[p].content;
+            console.log('[Workbench:engine]', p, 'done (len=' + (outputs[p] || '').length + ')');
+          }
         } else if (st === 'error' || st === 'login_required') {
-          if (errors[p] === undefined) errors[p] = task.providers[p].error || st;
+          if (errors[p] === undefined) {
+            errors[p] = task.providers[p].error || st;
+            console.warn('[Workbench:engine]', p, 'failed:', errors[p]);
+          }
         } else {
           allSettled = false;
         }
@@ -54,6 +62,19 @@ export async function runWorkbenchExecution(
     await sleep(400);
   }
 
+  // 超时仍未落定（仍在 sending/waiting）的 provider，记为明确超时错误，便于排查
+  for (const p of providers) {
+    if (outputs[p] === undefined && errors[p] === undefined) {
+      errors[p] = `超时（>${budgetSec}s 无响应，可能未登录 / 网络不通 / 受信任点击未触发）`;
+      console.warn('[Workbench:engine]', p, 'timeout after', budgetSec, 's');
+    }
+  }
+
   const ok = providers.every((p) => outputs[p] !== undefined && errors[p] === undefined);
+  console.log('[Workbench:engine] 结束', {
+    ok,
+    answered: Object.keys(outputs),
+    failed: Object.keys(errors),
+  });
   return { ok, outputs, errors };
 }

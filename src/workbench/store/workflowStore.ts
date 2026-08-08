@@ -300,12 +300,20 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     get().updateNodeData(id, { status: 'running', error: undefined });
     try {
       const result = await sendWorkbenchExecute(rendered, providers, id, nodeType);
-      if (result && result.ok) {
+      const hasOutput = !!result && Object.keys(result.outputs).length > 0;
+      if (result && (result.ok || hasOutput)) {
         const output = joinOutputs(result.outputs, providers);
+        // 部分成功：只要有 ≥1 个 provider 返回正文就进入「待采纳」，
+        // 同时把失败 provider 的原因带上，便于排查（不会因单点失败拖垮整条链）。
+        const errMsg =
+          result.errors && Object.keys(result.errors).length
+            ? Object.values(result.errors).filter(Boolean).join('；')
+            : undefined;
         get().updateNodeData(id, {
           outputs: result.outputs,
           output,
-          status: 'reviewing', // 等待用户采纳
+          status: 'reviewing',
+          error: errMsg,
         });
       } else {
         const errMsg = result

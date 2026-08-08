@@ -88,7 +88,19 @@ export function NodeShell({
         )}
 
         {(data.output || data.error) && (
-          <div className="wb-output">{data.error ? `❌ ${data.error}` : data.output}</div>
+          <div className="wb-output">
+            {showProviders && data.providers.length > 0 && (
+              <div className="wb-output__meta">
+                ✅ {Object.keys(data.outputs).length}/{data.providers.length} 已回答
+              </div>
+            )}
+            {data.error && data.status === 'error' ? (
+              <div className="wb-output__err">❌ {data.error}</div>
+            ) : data.error ? (
+              <div className="wb-output__warn">⚠ 部分失败：{data.error}</div>
+            ) : null}
+            {data.output && <div className="wb-output__text">{data.output}</div>}
+          </div>
         )}
 
         <div className="mt-2 flex flex-wrap gap-2">

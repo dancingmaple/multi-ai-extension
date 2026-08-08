@@ -195,15 +195,19 @@ export class KimiAdapter extends BaseAdapter {
     }
 
     const r = send.getBoundingClientRect();
-    const rect = { left: r.left, top: r.top, width: r.width, height: r.height };
-    // 跨域 iframe → 父窗口（sidepanel）的 postMessage 是允许的
+    // 按钮在 Kimi 标签页自身视口内的中心坐标。直接让 background 用 chrome.debugger
+    // 在该 tab 的同坐标处派发受信任点击（Kimi 只接受 isTrusted 事件）。
+    // 走 chrome.runtime 通道（而非 window.parent.postMessage）：对「侧边栏 iframe」
+    // 与「工作台独立标签页」两种上下文都正确，且不再依赖父窗口监听。
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
     try {
-      window.parent.postMessage({ __kimiSend: true, rect }, '*');
-      console.log('[Kimi:adapter] submit → 已请求父窗口受信任点击', rect);
+      await chrome.runtime.sendMessage({ type: 'TRUSTED_CLICK', x: cx, y: cy });
+      console.log('[Kimi:adapter] submit → 已请求 background 受信任点击', { cx, cy });
     } catch (e) {
-      throw new SubmitFailedError(this.provider, 'postMessage 给父窗口失败：' + (e instanceof Error ? e.message : String(e)));
+      throw new SubmitFailedError(this.provider, '请求后台受信任点击失败：' + (e instanceof Error ? e.message : String(e)));
     }
-    // 父窗口会算绝对坐标并触发 chrome.debugger 点击；这里无需再等
+    // background 用 chrome.debugger 点击后 Kimi 开始生成；这里无需再等
   }
 }
 
