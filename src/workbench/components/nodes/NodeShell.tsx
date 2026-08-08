@@ -19,6 +19,13 @@ const STATUS_LABEL: Record<string, string> = {
   error: '失败',
 };
 
+const ACCENT_ICON: Record<Accent, string> = {
+  start: '🌱',
+  summarize: '📊',
+  process: '⚙️',
+  end: '🏁',
+};
+
 export type Accent = 'start' | 'summarize' | 'process' | 'end';
 
 interface Props {
@@ -136,8 +143,10 @@ export function NodeShell({
       {showTarget && <Handle type="target" position={Position.Left} />}
 
       <div className="wb-node__header">
+        <span className="wb-node__icon" aria-hidden>{ACCENT_ICON[accent]}</span>
         <span className="truncate">{data.label}</span>
         <span className={`wb-node__status wb-node__status--${data.status}`}>
+          <span className="wb-node__dot" aria-hidden />
           {STATUS_LABEL[data.status] ?? data.status}
         </span>
       </div>
@@ -209,12 +218,15 @@ export function NodeShell({
         )}
 
         {showProviders && (
-          <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1">
+          <div className="wb-providers">
             {ALL_PROVIDERS.map((p) => (
-              <label key={p} className="flex items-center gap-1 text-[11px] text-slate-200 nodrag">
+              <label
+                key={p}
+                className={`wb-provider ${data.providers.includes(p) ? 'wb-provider--on' : ''}`}
+              >
                 <input
                   type="checkbox"
-                  className="accent-sky-400 nodrag"
+                  className="wb-provider__input nodrag"
                   checked={data.providers.includes(p)}
                   onChange={(e) => {
                     const next = e.target.checked
@@ -223,7 +235,7 @@ export function NodeShell({
                     updateNodeData(id, { providers: next });
                   }}
                 />
-                {PROVIDER_LABELS[p]}
+                <span className="wb-provider__label">{PROVIDER_LABELS[p]}</span>
               </label>
             ))}
           </div>
@@ -342,17 +354,18 @@ export function NodeShell({
           </div>
         )}
 
-        <div className="mt-2 flex flex-wrap gap-2">
+        <div className="wb-actions">
           <button
-            className="rounded bg-sky-500 px-2 py-1 text-[11px] font-medium text-white hover:bg-sky-400 disabled:opacity-50"
+            className="wb-actions__btn wb-actions__btn--run"
             disabled={running}
             onClick={() => void executeNode(id)}
+            title="仅运行当前节点"
           >
-            {running ? '运行中…' : '运行'}
+            {running ? '运行中…' : '▶ 运行'}
           </button>
           {canGrab && (
             <button
-              className="rounded bg-amber-500 px-2 py-1 text-[11px] font-medium text-white hover:bg-amber-400 disabled:opacity-50"
+              className="wb-actions__btn wb-actions__btn--grab"
               disabled={grabbing}
               onClick={() => void onGrab()}
               title="自动抓取可能漏掉回答：从各家标签页重新读屏补全"
@@ -362,18 +375,19 @@ export function NodeShell({
           )}
           {data.status === 'reviewing' && (
             <button
-              className="rounded bg-emerald-500 px-2 py-1 text-[11px] font-medium text-white hover:bg-emerald-400"
+              className="wb-actions__btn wb-actions__btn--ok"
               onClick={() => confirmNode(id)}
+              title="采纳当前结果（状态变为成功）"
             >
-              采纳
+              ✓ 采纳
             </button>
           )}
           {data.status === 'error' && (
             <button
-              className="rounded bg-rose-500 px-2 py-1 text-[11px] font-medium text-white hover:bg-rose-400"
+              className="wb-actions__btn wb-actions__btn--retry"
               onClick={() => void executeNode(id)}
             >
-              重试
+              ↻ 重试
             </button>
           )}
         </div>

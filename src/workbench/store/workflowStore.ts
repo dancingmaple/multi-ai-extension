@@ -511,8 +511,12 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     scheduleSave(get);
   },
   addNode: (nodeType) => {
-    const offset = get().nodes.length * 12;
-    const node = makeNode(nodeType, { x: 120 + offset, y: 80 + offset });
+    // 新节点放在画布中部偏上的空位：按已有节点数做「3 列网格 + 级联偏移」，
+    // 避免全部堆在左上角重叠，也方便在画布空白处直接操作。
+    const count = get().nodes.length;
+    const col = count % 3;
+    const row = Math.floor(count / 3) % 4;
+    const node = makeNode(nodeType, { x: 200 + col * 120, y: 120 + row * 100 });
     set({ nodes: [...get().nodes, node] });
     scheduleSave(get);
   },
@@ -559,7 +563,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     get().updateNodeData(id, { error: undefined });
     try {
       const result = await sendWorkbenchGrab(sendPrompt, providers, id, taskId, prevTabIds, prevUrls);
-      // 合并：保留已有回答，仅用地动抓取成功的内容补全缺失项
+      // 合并：只补全「缺失」项，不覆盖用户已编辑过的内容（防止手动获取把改好的文本冲掉）
       const merged: Partial<Record<ProviderName, string>> = { ...(prevOutputs as Record<ProviderName, string>) };
       const errs: Partial<Record<ProviderName, string>> = {};
       const urls: Partial<Record<ProviderName, string>> = { ...(prevUrls as Record<ProviderName, string>) };
@@ -567,7 +571,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       for (const p of providers) {
         const txt = result.outputs[p];
         if (txt && txt.length > 0) {
-          merged[p] = txt;
+          // 已有非空回答（可能是用户编辑过的）则保留，仅缺失时补全
+          if (!merged[p] || merged[p]!.length === 0) merged[p] = txt;
         } else if (result.errors[p]) {
           errs[p] = result.errors[p];
         }
@@ -606,7 +611,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
     // 起点：纯种子输入，不调用 AI
     if (nodeType === 'start') {
-      get().updateNodeData(id, { output: prompt, status: 'success' });
+      get().updateNodeData(id, { output: prompt, status: 'success', error: undefined });
       return;
     }
 
@@ -662,9 +667,17 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   runDownstream: async (id) => {
+    // 运行前重置：把本次涉及的节点恢复为 idle、清空旧错误与残留的自动获取倒计时，
+    // 避免「上次失败还挂着红色状态 / 上一轮的自动获取到点后又来抓一次」。
     const order = topoOrder(get().nodes, get().edges);
     const desc = descendants(id, get().edges);
     const seq = order.filter((n) => desc.has(n.id));
+    for (const n of seq) clearAutoGrabTimer(n.id);
+    set({
+      nodes: get().nodes.map((n) =>
+        desc.has(n.id) ? { ...n, data: { ...n.data, status: 'idle' as NodeStatus, error: undefined, autoGrabAt: undefined } } : n
+      ),
+    });
     set({ running: true });
     try {
       for (const n of seq) {
@@ -677,6 +690,14 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   runWorkflow: async () => {
+    // 运行前重置全部节点：清除旧状态/错误/残留自动获取定时器，保证本次运行干净无残留
+    for (const n of get().nodes) clearAutoGrabTimer(n.id);
+    set({
+      nodes: get().nodes.map((n) => ({
+        ...n,
+        data: { ...n.data, status: 'idle' as NodeStatus, error: undefined, autoGrabAt: undefined },
+      })),
+    });
     const order = topoOrder(get().nodes, get().edges);
     set({ running: true });
     try {
@@ -711,8 +732,9 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
   save: async () => {
     try {
+      // 只存可序列化字段（去掉 ReactFlow 注入的 measured/selected/dragging 等瞬态）
       await chrome.storage.local.set({
-        [STORAGE_KEY]: { nodes: get().nodes, edges: get().edges },
+        [STORAGE_KEY]: { nodes: sanitizeNodes(get().nodes), edges: sanitizeEdges(get().edges) },
       });
     } catch {
       /* 存储失败时静默 */

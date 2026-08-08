@@ -27,11 +27,11 @@ const nodeTypes: NodeTypes = {
   end: EndNode,
 };
 
-const ADD_BUTTONS: { type: WorkbenchNodeType; label: string }[] = [
-  { type: 'start', label: '+ 起点' },
-  { type: 'summarize', label: '+ 汇总' },
-  { type: 'process', label: '+ 处理' },
-  { type: 'end', label: '+ 终点' },
+const ADD_BUTTONS: { type: WorkbenchNodeType; label: string; icon: string }[] = [
+  { type: 'start', label: '起点', icon: '🌱' },
+  { type: 'summarize', label: '汇总', icon: '📊' },
+  { type: 'process', label: '处理', icon: '⚙️' },
+  { type: 'end', label: '终点', icon: '🏁' },
 ];
 
 export function WorkbenchApp() {
@@ -57,66 +57,87 @@ export function WorkbenchApp() {
   }, [load]);
 
   return (
-    <div className="flex h-full flex-col bg-slate-900 text-slate-100">
+    <div className="wb-app">
       {/* 顶部工具栏 */}
-      <header className="flex flex-wrap items-center gap-2 border-b border-slate-700 bg-slate-800 px-4 py-2">
-        <span className="mr-2 text-sm font-semibold">🧠 AI 工作台</span>
-        {ADD_BUTTONS.map((b) => (
+      <header className="wb-toolbar">
+        <div className="wb-toolbar__brand">
+          <span className="wb-toolbar__logo">🧠</span>
+          <span className="wb-toolbar__title">AI 工作台</span>
+        </div>
+
+        <div className="wb-toolbar__group" title="添加节点">
+          {ADD_BUTTONS.map((b) => (
+            <button
+              key={b.type}
+              className={`wb-toolbar__btn wb-add-btn wb-add-btn--${b.type}`}
+              onClick={() => addNode(b.type)}
+              title={`添加「${b.label}」节点`}
+            >
+              <span className="wb-add-btn__icon">{b.icon}</span>
+              <span>{b.label}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="wb-toolbar__spacer" />
+
+        <div className="wb-toolbar__group">
           <button
-            key={b.type}
-            className="rounded bg-slate-700 px-2 py-1 text-xs hover:bg-slate-600"
-            onClick={() => addNode(b.type)}
-          >
-            {b.label}
-          </button>
-        ))}
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            className="rounded bg-slate-700 px-3 py-1 text-xs hover:bg-slate-600"
+            className="wb-toolbar__btn"
             onClick={() => openPanel('saved')}
+            title="保存当前画布为可复用工作流"
           >
             💾 保存
           </button>
           <button
-            className="rounded bg-slate-700 px-3 py-1 text-xs hover:bg-slate-600"
+            className="wb-toolbar__btn"
             onClick={() => openPanel('history')}
+            title="查看每次运行的完整过程与结果"
           >
-            📜 历史{runCount > 0 ? ` (${runCount})` : ''}
+            📜 历史{runCount > 0 ? <span className="wb-toolbar__badge">{runCount}</span> : null}
           </button>
           <button
-            className="rounded bg-sky-700 px-3 py-1 text-xs hover:bg-sky-600"
+            className="wb-toolbar__btn"
             onClick={() => exportRun()}
             title="导出最近一次运行（或当前设计草稿）为 Markdown"
           >
-            📤 导出 MD
+            📤 导出
           </button>
           <button
-            className={`rounded px-3 py-1 text-xs hover:opacity-80 ${
-              dockOpen ? 'bg-indigo-500' : 'bg-slate-700'
-            }`}
+            className={`wb-toolbar__btn ${dockOpen ? 'wb-toolbar__btn--active' : ''}`}
             onClick={toggleDock}
             title="停靠各节点的 AI 会话，点击即可聚焦/打开对应标签页"
           >
             🖥 会话
           </button>
+        </div>
+
+        <div className="wb-toolbar__group">
           <button
-            className="rounded bg-emerald-600 px-3 py-1 text-xs font-medium hover:bg-emerald-500 disabled:opacity-50"
+            className="wb-toolbar__run"
             disabled={running}
             onClick={() => void runWorkflow()}
+            title="按拓扑顺序运行全部节点"
           >
-            {running ? '执行中…' : '▶ 运行工作流'}
+            {running ? (
+              <span className="wb-run-spinner" />
+            ) : (
+              <span className="wb-toolbar__run-icon">▶</span>
+            )}
+            {running ? '执行中…' : '运行'}
           </button>
           <button
-            className="rounded bg-slate-700 px-3 py-1 text-xs hover:bg-slate-600"
+            className="wb-toolbar__btn"
             onClick={reset}
+            title="重置为默认示例工作流"
           >
-            重置示例
+            ↺ 重置
           </button>
         </div>
       </header>
 
       {/* 画布 */}
-      <div className="flex-1">
+      <div className="wb-canvas">
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -128,21 +149,25 @@ export function WorkbenchApp() {
           proOptions={{ hideAttribution: true }}
           defaultEdgeOptions={{ animated: true }}
         >
-          <Background color="#334155" gap={16} />
-          <Controls />
+          <Background color="#1e293b" gap={18} size={1.5} />
+          <Controls
+            className="wb-flow-controls"
+            showInteractive={false}
+          />
           <MiniMap
             pannable
             zoomable
+            className="wb-minimap"
             nodeColor={(n) => {
               switch (n.type) {
                 case 'start':
-                  return '#16a34a';
+                  return '#10b981';
                 case 'summarize':
-                  return '#2563eb';
+                  return '#3b82f6';
                 case 'process':
-                  return '#9333ea';
+                  return '#a855f7';
                 case 'end':
-                  return '#d97706';
+                  return '#f59e0b';
                 default:
                   return '#64748b';
               }
@@ -151,11 +176,15 @@ export function WorkbenchApp() {
         </ReactFlow>
       </div>
 
-      {/* 底部说明 + 平台图例 */}
-      <footer className="border-t border-slate-700 bg-slate-800 px-4 py-1.5 text-[11px] text-slate-400">
-        提示：给节点设置「变量名」后，下游可用 <code className="text-slate-200">{'{{变量名}}'}</code>{' '}
-        引用其输出（也可用 <code className="text-slate-200">{'{{节点id.output}}'}</code>；变量名优先）。每个节点都用「新会话」调用各家 AI，运行后节点会记录每家的会话链接（可回看）；「🖥 会话」把各节点会话停靠在侧边，点击即可聚焦/打开对应标签页。每次运行自动归档到「📜 历史」；「💾 保存」存为可复用工作流；「📤 导出 MD」导出完整过程与结果。右键插件图标可重新打开本工作台。可用平台：
-        {ALL_PROVIDERS.map((p) => PROVIDER_LABELS[p]).join(' / ')}
+      {/* 底部状态栏 */}
+      <footer className="wb-statusbar">
+        <span>
+          提示：给节点设置「变量名」后，下游可用 <code>{'{{变量名}}'}</code> 引用其输出（变量名优先于{' '}
+          <code>{'{{节点id.output}}'}</code>）。每个节点独立新会话运行；「🖥 会话」停靠各节点会话，可聚焦/打开。
+        </span>
+        <span className="wb-statusbar__providers">
+          {ALL_PROVIDERS.map((p) => PROVIDER_LABELS[p]).join(' / ')}
+        </span>
       </footer>
 
       {/* 浮层：保存工作流 / 运行历史 */}

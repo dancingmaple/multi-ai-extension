@@ -323,7 +323,8 @@ export async function handleUIMessage(
     case 'MANUAL_GRAB_ALL': {
       const conv = getConversation(msg.conversationId);
       const turn = conv?.turns.find((t) => t.id === msg.turnId);
-      const pending = ALL_PROVIDERS.filter((p) => {
+      // 只抓「本轮实际请求过」的平台，避免对没参与的 provider 也去读屏（浪费 + 误报）
+      const pending = (turn?.targets ?? ALL_PROVIDERS).filter((p) => {
         const a = turn?.answers[p];
         return !a || a.status !== 'done';
       });
@@ -433,9 +434,13 @@ function handleContentMessage(msg: Record<string, unknown>): void {
     broadcastTaskState({ type: 'TASK_STATE_UPDATE', task: updatedTask });
     persistStream(taskId, updatedTask, providersAllDone(updatedTask));
     if (providersAllDone(updatedTask)) {
-      saveToHistory(updatedTask).catch(console.error);
-      // 沉淀进多轮会话（§2 双态分离）：一轮全部 settle → 写进 Turn
-      sedimentTask(taskId, updatedTask);
+      // 工作台任务（wb_ 前缀）是独立运行管线：只做状态收集，不写侧边栏的多轮会话/历史，
+      // 否则每次运行工作流都会在「会话列表」和「历史」里堆一批无关记录。
+      if (!taskId.startsWith('wb_')) {
+        saveToHistory(updatedTask).catch(console.error);
+        // 沉淀进多轮会话（§2 双态分离）：一轮全部 settle → 写进 Turn
+        sedimentTask(taskId, updatedTask);
+      }
     }
   }
 }
@@ -449,12 +454,17 @@ export async function handleAskAll(
   const convId = opts?.convId;
   const forceNew = !!opts?.forceNew;
   const nodeId = opts?.nodeId;
-  let cid = convId ?? getConversationIdForTask(taskId);
-  if (!cid) cid = await ensureConversationForTask(taskId);
+  // 工作台任务（wb_ 前缀）走独立运行管线：不建多轮会话、不 appendTurn，
+  // 避免污染侧边栏会话列表（结果由工作台自己收集展示）。
+  const isWorkbench = taskId.startsWith('wb_');
+  if (!isWorkbench) {
+    let cid = convId ?? getConversationIdForTask(taskId);
+    if (!cid) cid = await ensureConversationForTask(taskId);
 
-  const conv = getConversation(cid);
-  if (!conv || !conv.turns.find((t) => t.id === taskId)) {
-    await appendTurn(cid, { id: taskId, prompt, targets });
+    const conv = getConversation(cid);
+    if (!conv || !conv.turns.find((t) => t.id === taskId)) {
+      await appendTurn(cid, { id: taskId, prompt, targets });
+    }
   }
 
   let task = getTask(taskId);
