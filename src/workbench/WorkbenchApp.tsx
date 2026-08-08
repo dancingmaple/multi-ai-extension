@@ -16,6 +16,8 @@ import { StartNode } from './components/nodes/StartNode';
 import { SummarizeNode } from './components/nodes/SummarizeNode';
 import { ProcessNode } from './components/nodes/ProcessNode';
 import { EndNode } from './components/nodes/EndNode';
+import { SavedWorkflowsPanel } from './components/SavedWorkflowsPanel';
+import { RunHistoryPanel } from './components/RunHistoryPanel';
 
 const nodeTypes: NodeTypes = {
   start: StartNode,
@@ -42,6 +44,10 @@ export function WorkbenchApp() {
   const reset = useWorkflowStore((s) => s.reset);
   const load = useWorkflowStore((s) => s.load);
   const running = useWorkflowStore((s) => s.running);
+  const openPanel = useWorkflowStore((s) => s.openPanel);
+  const exportRun = useWorkflowStore((s) => s.exportRun);
+  const panel = useWorkflowStore((s) => s.panel);
+  const runCount = useWorkflowStore((s) => s.runHistory.length);
 
   useEffect(() => {
     void load();
@@ -62,6 +68,25 @@ export function WorkbenchApp() {
           </button>
         ))}
         <div className="ml-auto flex items-center gap-2">
+          <button
+            className="rounded bg-slate-700 px-3 py-1 text-xs hover:bg-slate-600"
+            onClick={() => openPanel('saved')}
+          >
+            💾 保存
+          </button>
+          <button
+            className="rounded bg-slate-700 px-3 py-1 text-xs hover:bg-slate-600"
+            onClick={() => openPanel('history')}
+          >
+            📜 历史{runCount > 0 ? ` (${runCount})` : ''}
+          </button>
+          <button
+            className="rounded bg-sky-700 px-3 py-1 text-xs hover:bg-sky-600"
+            onClick={() => exportRun()}
+            title="导出最近一次运行（或当前设计草稿）为 Markdown"
+          >
+            📤 导出 MD
+          </button>
           <button
             className="rounded bg-emerald-600 px-3 py-1 text-xs font-medium hover:bg-emerald-500 disabled:opacity-50"
             disabled={running}
@@ -117,9 +142,13 @@ export function WorkbenchApp() {
       {/* 底部说明 + 平台图例 */}
       <footer className="border-t border-slate-700 bg-slate-800 px-4 py-1.5 text-[11px] text-slate-400">
         提示：给节点设置「变量名」后，下游可用 <code className="text-slate-200">{'{{变量名}}'}</code>{' '}
-        引用其输出（也可用 <code className="text-slate-200">{'{{节点id.output}}'}</code>；变量名优先）。右键插件图标可重新打开本工作台。可用平台：
+        引用其输出（也可用 <code className="text-slate-200">{'{{节点id.output}}'}</code>；变量名优先）。每次运行会自动归档到「📜 历史」；「💾 保存」可把当前画布存为可复用工作流；「📤 导出 MD」导出最近一次运行的完整过程与结果。右键插件图标可重新打开本工作台。可用平台：
         {ALL_PROVIDERS.map((p) => PROVIDER_LABELS[p]).join(' / ')}
       </footer>
+
+      {/* 浮层：保存工作流 / 运行历史 */}
+      {panel === 'saved' && <SavedWorkflowsPanel />}
+      {panel === 'history' && <RunHistoryPanel />}
     </div>
   );
 }

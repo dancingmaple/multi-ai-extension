@@ -26,6 +26,13 @@ import type {
 } from '@shared/types';
 import { PROVIDER_LABELS } from '@shared/constants';
 import { renderTemplate, type NodeOutput } from '../utils/template';
+import {
+  buildRunMarkdown,
+  buildDraftMarkdown,
+  downloadMarkdown,
+  safeFileName,
+  tsStamp,
+} from '../utils/export';
 
 export type NodeStatus = 'idle' | 'running' | 'reviewing' | 'success' | 'error';
 
@@ -42,11 +49,53 @@ export interface WorkbenchNodeData {
   outputs: Partial<Record<ProviderName, string>>;
   status: NodeStatus;
   error?: string;
+  /** 本次执行实际发送给 AI 的提示词（变量/上游占位符已替换），用于导出与排查 */
+  renderedPrompt?: string;
 }
 
 export type WBNode = Node<WorkbenchNodeData>;
 
+/** 已命名保存的工作流（可复用库） */
+export interface SavedWorkflow {
+  id: string;
+  name: string;
+  nodes: WBNode[];
+  edges: Edge[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 运行记录中，单个节点的过程与结果快照 */
+export interface RunNodeResult {
+  id: string;
+  label: string;
+  nodeType: WorkbenchNodeType;
+  varName?: string;
+  providers: ProviderName[];
+  status: NodeStatus;
+  prompt: string;
+  renderedPrompt?: string;
+  output: string;
+  outputs: Partial<Record<ProviderName, string>>;
+  error?: string;
+}
+
+/** 一次工作流运行的历史记录 */
+export interface RunRecord {
+  id: string;
+  name: string;
+  createdAt: number;
+  status: 'success' | 'partial' | 'error';
+  nodeCount: number;
+  startPrompt: string;
+  nodes: RunNodeResult[];
+  edges: Edge[];
+}
+
 const STORAGE_KEY = 'workbench_workflow_v1';
+const SAVED_KEY = 'workbench_saved_v1';
+const HISTORY_KEY = 'workbench_history_v1';
+const HISTORY_CAP = 50;
 
 let nodeSeq = 0;
 function nid(): string {
@@ -205,6 +254,63 @@ function joinOutputs(
     .join('\n\n');
 }
 
+/** 仅保留可序列化、装载回 ReactFlow 所需的字段（去掉 measured/selected/dragging 等瞬态） */
+function sanitizeNodes(nodes: WBNode[]): WBNode[] {
+  return nodes.map((n) => ({
+    id: n.id,
+    type: n.type,
+    position: { x: n.position.x, y: n.position.y },
+    data: n.data,
+  }));
+}
+
+function sanitizeEdges(edges: Edge[]): Edge[] {
+  return edges.map((e) => ({
+    id: e.id,
+    source: e.source,
+    target: e.target,
+    animated: e.animated,
+    label: e.label,
+  }));
+}
+
+/** 从当前节点状态构建一次运行的记录 */
+function buildRunRecord(nodes: WBNode[], edges: Edge[]): RunRecord {
+  const runNodes: RunNodeResult[] = nodes.map((n) => ({
+    id: n.id,
+    label: n.data.label,
+    nodeType: n.data.nodeType,
+    varName: n.data.varName,
+    providers: n.data.providers,
+    status: n.data.status,
+    prompt: n.data.prompt,
+    renderedPrompt: n.data.renderedPrompt,
+    output: n.data.output,
+    outputs: n.data.outputs,
+    error: n.data.error,
+  }));
+  const startNode = nodes.find((n) => n.data.nodeType === 'start');
+  const hasErr = nodes.some((n) => n.data.status === 'error');
+  const hasOk = nodes.some(
+    (n) => n.data.status === 'success' || n.data.status === 'reviewing' || n.data.output
+  );
+  const status: RunRecord['status'] = !hasErr
+    ? 'success'
+    : hasOk
+      ? 'partial'
+      : 'error';
+  return {
+    id: `run_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e4)}`,
+    name: (startNode?.data.prompt || '未命名工作流').split('\n')[0].slice(0, 30) || '未命名工作流',
+    createdAt: Date.now(),
+    status,
+    nodeCount: nodes.length,
+    startPrompt: startNode?.data.prompt ?? '',
+    nodes: runNodes,
+    edges: sanitizeEdges(edges),
+  };
+}
+
 /** 通过 background 执行一次 AI 调用（WORKBENCH_EXECUTE） */
 function sendWorkbenchExecute(
   prompt: string,
@@ -256,6 +362,13 @@ interface WorkflowState {
   edges: Edge[];
   running: boolean;
 
+  // ── 已保存工作流（可复用库） ──
+  savedWorkflows: SavedWorkflow[];
+  // ── 运行历史 ──
+  runHistory: RunRecord[];
+  // ── 当前打开的浮层：'none' | 'saved' | 'history' ──
+  panel: 'none' | 'saved' | 'history';
+
   // ── ReactFlow 编辑回调 ──
   onNodesChange: (changes: NodeChange[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
@@ -273,12 +386,33 @@ interface WorkflowState {
   load: () => Promise<void>;
   save: () => Promise<void>;
   reset: () => void;
+
+  // ── 已保存工作流 ──
+  loadSavedWorkflows: () => Promise<void>;
+  saveWorkflowAs: (name: string) => Promise<void>;
+  loadSavedWorkflow: (id: string) => Promise<void>;
+  renameSavedWorkflow: (id: string, name: string) => Promise<void>;
+  deleteSavedWorkflow: (id: string) => Promise<void>;
+
+  // ── 运行历史 ──
+  loadRunHistory: () => Promise<void>;
+  recordRun: () => void;
+  deleteRunHistory: (id: string) => void;
+  clearRunHistory: () => void;
+  exportRun: (id?: string) => void;
+
+  // ── 浮层 ──
+  openPanel: (panel: 'saved' | 'history') => void;
+  closePanel: () => void;
 }
 
 export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   nodes: [],
   edges: [],
   running: false,
+  savedWorkflows: [],
+  runHistory: [],
+  panel: 'none',
 
   onNodesChange: (changes) => {
     set({ nodes: applyNodeChanges(changes, get().nodes) });
@@ -336,7 +470,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     }
 
     // summarize / process：调用 background 复用 handleAskAll
-    get().updateNodeData(id, { status: 'running', error: undefined });
+    get().updateNodeData(id, { status: 'running', error: undefined, renderedPrompt: rendered });
     try {
       const result = await sendWorkbenchExecute(rendered, providers, id, nodeType);
       const hasOutput = !!result && Object.keys(result.outputs).length > 0;
@@ -376,6 +510,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       }
     } finally {
       set({ running: false });
+      get().recordRun();
     }
   },
 
@@ -388,6 +523,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       }
     } finally {
       set({ running: false });
+      get().recordRun();
     }
   },
 
@@ -421,4 +557,129 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     set({ nodes: seed.nodes, edges: seed.edges });
     void get().save();
   },
+
+  // ── 已保存工作流（可复用库） ──────────────────────────
+  loadSavedWorkflows: async () => {
+    try {
+      const res = await chrome.storage.local.get(SAVED_KEY);
+      const list = (res[SAVED_KEY] as SavedWorkflow[] | undefined) ?? [];
+      set({ savedWorkflows: Array.isArray(list) ? list : [] });
+    } catch {
+      set({ savedWorkflows: [] });
+    }
+  },
+
+  saveWorkflowAs: async (name) => {
+    const trimmed = (name || '').trim() || `工作流 ${new Date().toLocaleString('zh-CN')}`;
+    const wf: SavedWorkflow = {
+      id: `wf_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e4)}`,
+      name: trimmed,
+      nodes: sanitizeNodes(get().nodes),
+      edges: sanitizeEdges(get().edges),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const next = [wf, ...get().savedWorkflows];
+    set({ savedWorkflows: next });
+    try {
+      await chrome.storage.local.set({ [SAVED_KEY]: next });
+    } catch {
+      /* 存储失败静默 */
+    }
+  },
+
+  loadSavedWorkflow: async (id) => {
+    const wf = get().savedWorkflows.find((w) => w.id === id);
+    if (!wf) return;
+    set({ nodes: wf.nodes, edges: wf.edges, panel: 'none' });
+    void get().save();
+  },
+
+  renameSavedWorkflow: async (id, name) => {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return;
+    const next = get().savedWorkflows.map((w) =>
+      w.id === id ? { ...w, name: trimmed, updatedAt: Date.now() } : w
+    );
+    set({ savedWorkflows: next });
+    try {
+      await chrome.storage.local.set({ [SAVED_KEY]: next });
+    } catch {
+      /* 静默 */
+    }
+  },
+
+  deleteSavedWorkflow: async (id) => {
+    const next = get().savedWorkflows.filter((w) => w.id !== id);
+    set({ savedWorkflows: next });
+    try {
+      await chrome.storage.local.set({ [SAVED_KEY]: next });
+    } catch {
+      /* 静默 */
+    }
+  },
+
+  // ── 运行历史 ──────────────────────────────────────────
+  loadRunHistory: async () => {
+    try {
+      const res = await chrome.storage.local.get(HISTORY_KEY);
+      const list = (res[HISTORY_KEY] as RunRecord[] | undefined) ?? [];
+      set({ runHistory: Array.isArray(list) ? list : [] });
+    } catch {
+      set({ runHistory: [] });
+    }
+  },
+
+  recordRun: () => {
+    const rec = buildRunRecord(get().nodes, get().edges);
+    const next = [rec, ...get().runHistory].slice(0, HISTORY_CAP);
+    set({ runHistory: next });
+    try {
+      void chrome.storage.local.set({ [HISTORY_KEY]: next });
+    } catch {
+      /* 静默 */
+    }
+  },
+
+  deleteRunHistory: (id) => {
+    const next = get().runHistory.filter((r) => r.id !== id);
+    set({ runHistory: next });
+    try {
+      void chrome.storage.local.set({ [HISTORY_KEY]: next });
+    } catch {
+      /* 静默 */
+    }
+  },
+
+  clearRunHistory: () => {
+    set({ runHistory: [] });
+    try {
+      void chrome.storage.local.set({ [HISTORY_KEY]: [] });
+    } catch {
+      /* 静默 */
+    }
+  },
+
+  exportRun: (id) => {
+    const rec = id ? get().runHistory.find((r) => r.id === id) : get().runHistory[0];
+    if (rec) {
+      const md = buildRunMarkdown(rec);
+      downloadMarkdown(`run_${safeFileName(rec.name)}_${tsStamp(new Date(rec.createdAt))}.md`, md);
+      return;
+    }
+    // 没有历史记录：导出当前画布设计草稿
+    const draftMd = buildDraftMarkdown(
+      '当前设计',
+      get().nodes.map((n) => ({ data: n.data }))
+    );
+    downloadMarkdown(`workbench_draft_${tsStamp()}.md`, draftMd);
+  },
+
+  // ── 浮层 ──────────────────────────────────────────────
+  openPanel: (panel) => {
+    if (panel === 'saved') void get().loadSavedWorkflows();
+    if (panel === 'history') void get().loadRunHistory();
+    set({ panel });
+  },
+  closePanel: () => set({ panel: 'none' }),
 }));
