@@ -7,6 +7,7 @@ import { Handle, Position } from 'reactflow';
 import type { WorkbenchNodeData } from '../../store/workflowStore';
 import { useWorkflowStore } from '../../store/workflowStore';
 import { ALL_PROVIDERS, PROVIDER_LABELS } from '@shared/constants';
+import { isValidVarName } from '../../utils/template';
 
 const STATUS_LABEL: Record<string, string> = {
   idle: '空闲',
@@ -56,6 +57,25 @@ export function NodeShell({
       </div>
 
       <div className="wb-node__body">
+        {/* 变量名：设置后，下游节点可用 {{变量名}} 引用本节点输出 */}
+        <div className="wb-varname">
+          <label className="wb-varname__label">变量名</label>
+          <input
+            className={`wb-input wb-varname__input ${
+              data.varName && !isValidVarName(data.varName) ? 'wb-input--invalid' : ''
+            }`}
+            value={data.varName ?? ''}
+            placeholder="如 summary（下游用 {{summary}} 引用）"
+            onChange={(e) => updateNodeData(id, { varName: e.target.value })}
+          />
+          {data.varName && !isValidVarName(data.varName) && (
+            <div className="wb-varname__warn">⚠ 变量名需以字母/中文开头，仅含字母数字下划线</div>
+          )}
+          {data.varName && isValidVarName(data.varName) && (
+            <div className="wb-varname__hint">下游可用 <code>{`{{${data.varName}}}`}</code> 引用</div>
+          )}
+        </div>
+
         {editablePrompt && (
           <textarea
             className="wb-input"

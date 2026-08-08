@@ -71,6 +71,40 @@ textarea.wb-input {
   font-family: inherit;
 }
 
+/* 变量名输入区 */
+.wb-varname {
+  margin-bottom: 8px;
+}
+.wb-varname__label {
+  display: block;
+  font-size: 11px;
+  color: #94a3b8;
+  margin-bottom: 3px;
+}
+.wb-varname__input {
+  height: 28px;
+  padding: 4px 8px;
+}
+.wb-input--invalid {
+  border-color: #ef4444 !important;
+}
+.wb-varname__warn {
+  margin-top: 3px;
+  font-size: 10px;
+  color: #fca5a5;
+}
+.wb-varname__hint {
+  margin-top: 3px;
+  font-size: 10px;
+  color: #7dd3fc;
+}
+.wb-varname__hint code {
+  background: rgba(125, 211, 252, 0.12);
+  padding: 0 4px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .wb-output {
   margin-top: 8px;
   max-height: 160px;

@@ -116,8 +116,8 @@ export function WorkbenchApp() {
 
       {/* 底部说明 + 平台图例 */}
       <footer className="border-t border-slate-700 bg-slate-800 px-4 py-1.5 text-[11px] text-slate-400">
-        提示：在「汇总 / 处理」节点里用 <code className="text-slate-200">{'{{节点id.output}}'}</code>{' '}
-        引用上游输出；右键插件图标可重新打开本工作台。可用平台：
+        提示：给节点设置「变量名」后，下游可用 <code className="text-slate-200">{'{{变量名}}'}</code>{' '}
+        引用其输出（也可用 <code className="text-slate-200">{'{{节点id.output}}'}</code>；变量名优先）。右键插件图标可重新打开本工作台。可用平台：
         {ALL_PROVIDERS.map((p) => PROVIDER_LABELS[p]).join(' / ')}
       </footer>
     </div>

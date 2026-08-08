@@ -34,7 +34,9 @@ export interface WorkbenchNodeData {
   nodeType: WorkbenchNodeType;
   prompt: string;
   providers: ProviderName[];
-  /** 聚合后的文本（供下游 {{node_id.output}} 引用） */
+  /** 本节点输出的变量名（可选）。下游可用 {{变量名}} 引用，比 {{node_id.output}} 更稳定可读 */
+  varName?: string;
+  /** 聚合后的文本（供下游 {{node_id.output}} 或 {{变量名}} 引用） */
   output: string;
   /** 各家 AI 的原始回答 */
   outputs: Partial<Record<ProviderName, string>>;
@@ -53,19 +55,33 @@ function nid(): string {
 }
 
 function defaultData(nodeType: WorkbenchNodeType): WorkbenchNodeData {
-  const presets: Record<WorkbenchNodeType, { label: string; prompt: string; providers: ProviderName[] }> = {
-    start: { label: '起点 · 输入', prompt: '在这里写下你的原始问题 / 素材……', providers: [] },
+  const presets: Record<
+    WorkbenchNodeType,
+    { label: string; prompt: string; providers: ProviderName[]; varName?: string }
+  > = {
+    start: {
+      label: '起点 · 输入',
+      prompt: '在这里写下你的原始问题 / 素材……',
+      providers: [],
+      varName: 'input',
+    },
     summarize: {
       label: '汇总',
-      prompt: '请把以下内容整理成简明摘要：\n\n{{start.output}}',
+      prompt: '请把以下内容整理成简明摘要：\n\n{{input}}',
       providers: ['chatgpt', 'gemini'],
+      varName: 'summary',
     },
     process: {
       label: '处理',
-      prompt: '基于以下摘要，给出可执行的方案：\n\n{{summarize.output}}',
+      prompt: '基于以下摘要，给出可执行的方案：\n\n{{summary}}',
       providers: ['deepseek', 'qwen'],
+      varName: 'plan',
     },
-    end: { label: '终点 · 输出', prompt: '最终交付物：\n\n{{summarize.output}}\n\n{{process.output}}', providers: [] },
+    end: {
+      label: '终点 · 输出',
+      prompt: '最终交付物：\n\n{{summary}}\n\n{{plan}}',
+      providers: [],
+    },
   };
   const p = presets[nodeType];
   return {
@@ -73,6 +89,7 @@ function defaultData(nodeType: WorkbenchNodeType): WorkbenchNodeData {
     nodeType,
     prompt: p.prompt,
     providers: p.providers,
+    varName: p.varName,
     output: '',
     outputs: {},
     status: 'idle',
@@ -103,11 +120,23 @@ function seedWorkflow(): { nodes: WBNode[]; edges: Edge[] } {
   return { nodes: [start, summarize, process, end], edges };
 }
 
-/** 把所有节点的输出汇总成模板渲染所需的 map */
+/** 把所有节点的输出汇总成模板渲染所需的 map（按节点 ID 索引） */
 function buildOutputMap(nodes: WBNode[]): Record<string, NodeOutput> {
   const map: Record<string, NodeOutput> = {};
   for (const n of nodes) {
     map[n.id] = { output: n.data.output, outputs: n.data.outputs as Record<string, string> };
+  }
+  return map;
+}
+
+/** 把所有「设置了变量名」的节点输出汇总成 map（按变量名索引，优先级高于节点 ID） */
+function buildVarMap(nodes: WBNode[]): Record<string, NodeOutput> {
+  const map: Record<string, NodeOutput> = {};
+  for (const n of nodes) {
+    const name = n.data.varName?.trim();
+    if (name) {
+      map[name] = { output: n.data.output, outputs: n.data.outputs as Record<string, string> };
+    }
   }
   return map;
 }
@@ -297,7 +326,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     }
 
     const outputMap = buildOutputMap(get().nodes);
-    const rendered = renderTemplate(prompt, outputMap);
+    const varMap = buildVarMap(get().nodes);
+    const rendered = renderTemplate(prompt, outputMap, varMap);
 
     // 终点：聚合上游，不调用 AI（仅渲染模板）
     if (nodeType === 'end') {
