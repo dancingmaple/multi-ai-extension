@@ -19,7 +19,8 @@ function sleep(ms: number): Promise<void> {
  */
 export async function runWorkbenchExecution(
   prompt: string,
-  providers: ProviderName[]
+  providers: ProviderName[],
+  opts?: { forceNew?: boolean }
 ): Promise<WorkbenchExecResult> {
   const taskId = `wb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const outputs: Partial<Record<ProviderName, string>> = {};
@@ -29,8 +30,8 @@ export async function runWorkbenchExecution(
     return { ok: false, outputs, errors: { _empty: '未选择任何 AI' } as Partial<Record<ProviderName, string>> };
   }
 
-  console.log('[Workbench:engine] 开始执行', { taskId, providers });
-  await handleAskAll(taskId, prompt, providers);
+  console.log('[Workbench:engine] 开始执行', { taskId, providers, forceNew: !!opts?.forceNew });
+  await handleAskAll(taskId, prompt, providers, { forceNew: opts?.forceNew });
 
   // 取各家超时上限 + 余量作为总等待上限
   const maxPer = Math.max(...providers.map((p) => DEFAULT_SETTINGS.responseTimeoutMs[p] ?? 60000));
@@ -78,11 +79,32 @@ export async function runWorkbenchExecution(
     }
   }
 
+  // 收集每家 AI 的最终会话地址与标签页 id（回看/手动获取/会话坞用）。
+  // 优先用实时标签页地址（最权威），content script 经 EMBED_URL 回传的 url 作为兜底。
+  const urls: Partial<Record<ProviderName, string>> = {};
+  const tabIds: Partial<Record<ProviderName, number>> = {};
+  const task = getTask(taskId);
+  for (const p of providers) {
+    const st = task?.providers?.[p];
+    if (st?.tabId !== undefined) tabIds[p] = st.tabId;
+    let liveUrl: string | undefined;
+    if (st?.tabId !== undefined) {
+      try {
+        liveUrl = (await chrome.tabs.get(st.tabId)).url;
+      } catch {
+        /* 标签页可能已被用户关闭，忽略 */
+      }
+    }
+    const finalUrl = liveUrl || st?.url;
+    if (finalUrl) urls[p] = finalUrl;
+  }
+
   const ok = providers.every((p) => outputs[p] !== undefined && errors[p] === undefined);
   console.log('[Workbench:engine] 结束', {
     ok,
     answered: Object.keys(outputs),
     failed: Object.keys(errors),
+    urls: Object.keys(urls),
   });
-  return { ok, outputs, errors, taskId };
+  return { ok, outputs, errors, taskId, urls, tabIds };
 }

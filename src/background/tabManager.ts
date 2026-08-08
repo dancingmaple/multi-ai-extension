@@ -3,19 +3,25 @@ import { getProviderUrl, getProviderMatchPattern } from '../shared/providers';
 import { TAB_SETTLE_MS, PING_RETRY_MAX, PING_RETRY_DELAY_MS } from '../shared/constants';
 import { sleep } from '../shared/utils';
 
-export async function getOrCreateProviderTab(provider: ProviderName): Promise<number> {
-  console.log('[MultiAI:tabManager] getOrCreateProviderTab for', provider);
-  const existing = await findExistingTab(provider);
-  if (existing !== null) {
-    // Check if content script is actually alive (might be stale after extension reload)
-    try {
-      await ensureContentScriptReady(existing);
-      console.log('[MultiAI:tabManager] Found existing tab', existing, 'for', provider);
-      return existing;
-    } catch {
-      console.log('[MultiAI:tabManager] Existing tab', existing, 'has stale content script, creating new tab');
-      // Close the stale tab
-      chrome.tabs.remove(existing).catch(() => {});
+export async function getOrCreateProviderTab(
+  provider: ProviderName,
+  opts?: { forceNew?: boolean }
+): Promise<number> {
+  console.log('[MultiAI:tabManager] getOrCreateProviderTab for', provider, { forceNew: !!opts?.forceNew });
+  // forceNew：工作台每个节点都要「新会话」，不复用上一个节点的标签页（否则会串台/续聊）
+  if (!opts?.forceNew) {
+    const existing = await findExistingTab(provider);
+    if (existing !== null) {
+      // Check if content script is actually alive (might be stale after extension reload)
+      try {
+        await ensureContentScriptReady(existing);
+        console.log('[MultiAI:tabManager] Found existing tab', existing, 'for', provider);
+        return existing;
+      } catch {
+        console.log('[MultiAI:tabManager] Existing tab', existing, 'has stale content script, creating new tab');
+        // Close the stale tab
+        chrome.tabs.remove(existing).catch(() => {});
+      }
     }
   }
 

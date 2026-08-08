@@ -115,15 +115,18 @@ export { grabInPage };
 /**
  * 纯读屏：找到指定 provider 的标签页，执行 grabInPage 读回回答文本。
  * 不写会话/运行时，供工作台「手动获取」等旁路场景复用（只是兜底读，不沉淀）。
- * 优先用 taskId 记录的 tabId；否则按域名在当前所有标签页里查找。
+ * 定位优先级：显式传入的 tabId（forceNew 后精确对应，避免多标签串台）
+ * > taskId 记录的 tabId > 按域名在全部标签页里查找（兜底）。
  */
 export async function grabFromProviderTab(
   provider: ProviderName,
   prompt: string,
-  taskId?: string
-): Promise<{ ok: boolean; text: string; method?: string; reason?: string }> {
-  let tabId: number | undefined =
-    taskId !== undefined ? getTask(taskId)?.providers?.[provider]?.tabId : undefined;
+  opts?: { taskId?: string; tabId?: number }
+): Promise<{ ok: boolean; text: string; method?: string; reason?: string; url?: string; tabId?: number }> {
+  let tabId: number | undefined = opts?.tabId;
+  if (tabId === undefined && opts?.taskId !== undefined) {
+    tabId = getTask(opts.taskId)?.providers?.[provider]?.tabId;
+  }
   const pat = DOMAIN_PATTERN[provider];
   if (tabId === undefined && pat) {
     const tabs = await chrome.tabs.query({ url: pat });
@@ -144,10 +147,16 @@ export async function grabFromProviderTab(
       reason?: string;
     };
     const text = (got.text || '').trim();
-    if (text) return { ok: true, text, method: got.method };
-    return { ok: false, text: '', reason: got.reason || '页面当前没有可读取的回答文本' };
+    let url: string | undefined;
+    try {
+      url = (await chrome.tabs.get(tabId)).url;
+    } catch {
+      /* 标签已关闭 */
+    }
+    if (text) return { ok: true, text, method: got.method, url, tabId };
+    return { ok: false, text: '', reason: got.reason || '页面当前没有可读取的回答文本', url, tabId };
   } catch (e) {
-    return { ok: false, text: '', reason: e instanceof Error ? e.message : String(e) };
+    return { ok: false, text: '', reason: e instanceof Error ? e.message : String(e), tabId };
   }
 }
 
@@ -181,7 +190,7 @@ export async function manualGrab(
   }
 
   try {
-    const got = await grabFromProviderTab(provider, prompt, turnId);
+    const got = await grabFromProviderTab(provider, prompt, { taskId: turnId });
     const text = got.text;
 
     let task = getTask(turnId);

@@ -55,6 +55,10 @@ export interface WorkbenchNodeData {
   renderedPrompt?: string;
   /** 本次执行在 background 内部创建的 taskId，供「手动获取」定位标签页 */
   taskId?: string;
+  /** 每家 AI 回答后所在会话的最终地址（回看/溯源），键为 provider */
+  urls?: Partial<Record<ProviderName, string>>;
+  /** 每家 AI 实际运行的标签页 id（forceNew 后为新开标签），键为 provider */
+  tabIds?: Partial<Record<ProviderName, number>>;
 }
 
 export type WBNode = Node<WorkbenchNodeData>;
@@ -81,6 +85,8 @@ export interface RunNodeResult {
   renderedPrompt?: string;
   output: string;
   outputs: Partial<Record<ProviderName, string>>;
+  /** 每家 AI 回答后所在会话的最终地址（回看/溯源） */
+  urls?: Partial<Record<ProviderName, string>>;
   error?: string;
 }
 
@@ -291,6 +297,7 @@ function buildRunRecord(nodes: WBNode[], edges: Edge[]): RunRecord {
     renderedPrompt: n.data.renderedPrompt,
     output: n.data.output,
     outputs: n.data.outputs,
+    urls: n.data.urls,
     error: n.data.error,
   }));
   const startNode = nodes.find((n) => n.data.nodeType === 'start');
@@ -357,7 +364,8 @@ function sendWorkbenchExecute(
 function sendWorkbenchGrab(
   prompt: string,
   providers: ProviderName[],
-  taskId?: string
+  taskId?: string,
+  tabIds?: Partial<Record<ProviderName, number>>
 ): Promise<WorkbenchGrabResult> {
   return new Promise((resolve, reject) => {
     const msg: WorkbenchGrabMessage = {
@@ -366,6 +374,7 @@ function sendWorkbenchGrab(
       prompt,
       providers,
       taskId,
+      tabIds,
     };
     try {
       chrome.runtime.sendMessage(msg, (resp: WorkbenchGrabResult) => {
@@ -398,6 +407,9 @@ interface WorkflowState {
   runHistory: RunRecord[];
   // ── 当前打开的浮层：'none' | 'saved' | 'history' ──
   panel: 'none' | 'saved' | 'history';
+  // ── 会话坞（侧边嵌入/聚焦 AI 标签页）开关 ──
+  dockOpen: boolean;
+  toggleDock: () => void;
 
   // ── ReactFlow 编辑回调 ──
   onNodesChange: (changes: NodeChange[]) => void;
@@ -445,6 +457,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   savedWorkflows: [],
   runHistory: [],
   panel: 'none',
+  dockOpen: false,
 
   onNodesChange: (changes) => {
     set({ nodes: applyNodeChanges(changes, get().nodes) });
@@ -483,16 +496,19 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   grabNodeAnswers: async (id) => {
     const node = get().nodes.find((n) => n.id === id);
     if (!node) return;
-    const { providers, renderedPrompt, prompt, outputs: prevOutputs, taskId } = node.data;
+    const { providers, renderedPrompt, prompt, outputs: prevOutputs, taskId, tabIds: prevTabIds, urls: prevUrls } =
+      node.data;
     if (providers.length === 0) return;
     const sendPrompt = renderedPrompt || prompt;
 
     get().updateNodeData(id, { error: undefined });
     try {
-      const result = await sendWorkbenchGrab(sendPrompt, providers, taskId);
+      const result = await sendWorkbenchGrab(sendPrompt, providers, taskId, prevTabIds);
       // 合并：保留已有回答，仅用地动抓取成功的内容补全缺失项
       const merged: Partial<Record<ProviderName, string>> = { ...(prevOutputs as Record<ProviderName, string>) };
       const errs: Partial<Record<ProviderName, string>> = {};
+      const urls: Partial<Record<ProviderName, string>> = { ...(prevUrls as Record<ProviderName, string>) };
+      const tabIds: Partial<Record<ProviderName, number>> = { ...(prevTabIds as Record<ProviderName, number>) };
       for (const p of providers) {
         const txt = result.outputs[p];
         if (txt && txt.length > 0) {
@@ -500,6 +516,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         } else if (result.errors[p]) {
           errs[p] = result.errors[p];
         }
+        if (result.urls?.[p]) urls[p] = result.urls[p];
+        if (result.tabIds?.[p] !== undefined) tabIds[p] = result.tabIds[p];
       }
       const answered = providers.filter((p) => merged[p] && merged[p]!.length > 0);
       const output = joinOutputs(merged, providers);
@@ -513,6 +531,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         output,
         status: answered.length ? 'reviewing' : 'error',
         error: errMsg,
+        urls,
+        tabIds,
       });
     } catch (e) {
       get().updateNodeData(id, { error: e instanceof Error ? e.message : String(e) });
@@ -559,12 +579,20 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
           status: 'reviewing',
           error: errMsg,
           taskId: result.taskId,
+          urls: result.urls,
+          tabIds: result.tabIds,
         });
       } else {
         const errMsg = result
           ? Object.values(result.errors).filter(Boolean).join('；') || '执行失败'
           : '无响应';
-        get().updateNodeData(id, { status: 'error', error: errMsg, taskId: result?.taskId });
+        get().updateNodeData(id, {
+          status: 'error',
+          error: errMsg,
+          taskId: result?.taskId,
+          urls: result?.urls,
+          tabIds: result?.tabIds,
+        });
       }
     } catch (e) {
       get().updateNodeData(id, { status: 'error', error: e instanceof Error ? e.message : String(e) });
@@ -754,4 +782,5 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     set({ panel });
   },
   closePanel: () => set({ panel: 'none' }),
+  toggleDock: () => set((s) => ({ dockOpen: !s.dockOpen })),
 }));

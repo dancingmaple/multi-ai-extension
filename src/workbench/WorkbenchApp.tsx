@@ -18,6 +18,7 @@ import { ProcessNode } from './components/nodes/ProcessNode';
 import { EndNode } from './components/nodes/EndNode';
 import { SavedWorkflowsPanel } from './components/SavedWorkflowsPanel';
 import { RunHistoryPanel } from './components/RunHistoryPanel';
+import { SessionDock } from './components/SessionDock';
 
 const nodeTypes: NodeTypes = {
   start: StartNode,
@@ -48,6 +49,8 @@ export function WorkbenchApp() {
   const exportRun = useWorkflowStore((s) => s.exportRun);
   const panel = useWorkflowStore((s) => s.panel);
   const runCount = useWorkflowStore((s) => s.runHistory.length);
+  const dockOpen = useWorkflowStore((s) => s.dockOpen);
+  const toggleDock = useWorkflowStore((s) => s.toggleDock);
 
   useEffect(() => {
     void load();
@@ -86,6 +89,15 @@ export function WorkbenchApp() {
             title="导出最近一次运行（或当前设计草稿）为 Markdown"
           >
             📤 导出 MD
+          </button>
+          <button
+            className={`rounded px-3 py-1 text-xs hover:opacity-80 ${
+              dockOpen ? 'bg-indigo-500' : 'bg-slate-700'
+            }`}
+            onClick={toggleDock}
+            title="停靠各节点的 AI 会话，点击即可聚焦/打开对应标签页"
+          >
+            🖥 会话
           </button>
           <button
             className="rounded bg-emerald-600 px-3 py-1 text-xs font-medium hover:bg-emerald-500 disabled:opacity-50"
@@ -142,13 +154,16 @@ export function WorkbenchApp() {
       {/* 底部说明 + 平台图例 */}
       <footer className="border-t border-slate-700 bg-slate-800 px-4 py-1.5 text-[11px] text-slate-400">
         提示：给节点设置「变量名」后，下游可用 <code className="text-slate-200">{'{{变量名}}'}</code>{' '}
-        引用其输出（也可用 <code className="text-slate-200">{'{{节点id.output}}'}</code>；变量名优先）。每次运行会自动归档到「📜 历史」；「💾 保存」可把当前画布存为可复用工作流；「📤 导出 MD」导出最近一次运行的完整过程与结果。右键插件图标可重新打开本工作台。可用平台：
+        引用其输出（也可用 <code className="text-slate-200">{'{{节点id.output}}'}</code>；变量名优先）。每个节点都用「新会话」调用各家 AI，运行后节点会记录每家的会话链接（可回看）；「🖥 会话」把各节点会话停靠在侧边，点击即可聚焦/打开对应标签页。每次运行自动归档到「📜 历史」；「💾 保存」存为可复用工作流；「📤 导出 MD」导出完整过程与结果。右键插件图标可重新打开本工作台。可用平台：
         {ALL_PROVIDERS.map((p) => PROVIDER_LABELS[p]).join(' / ')}
       </footer>
 
       {/* 浮层：保存工作流 / 运行历史 */}
       {panel === 'saved' && <SavedWorkflowsPanel />}
       {panel === 'history' && <RunHistoryPanel />}
+
+      {/* 侧边会话坞 */}
+      <SessionDock />
     </div>
   );
 }

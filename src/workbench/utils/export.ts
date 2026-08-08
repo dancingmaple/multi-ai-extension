@@ -133,6 +133,16 @@ export function buildRunMarkdown(rec: RunRecord): string {
       L.push(`> ⚠ 错误：${tidy(n.error)}`);
       L.push('');
     }
+
+    const urlEntries = Object.entries(n.urls ?? {}).filter(([, u]) => u && u.length > 0);
+    if (urlEntries.length) {
+      L.push('### 各平台会话链接（回看 / 溯源）');
+      L.push('');
+      for (const [p, u] of urlEntries) {
+        L.push(`- ${PROVIDER_LABELS[p as ProviderName] ?? p}：${u}`);
+      }
+      L.push('');
+    }
   }
 
   return L.join('\n');
@@ -162,6 +172,15 @@ export function buildDraftMarkdown(
       L.push('```');
       L.push(tidy(d.prompt));
       L.push('```');
+      L.push('');
+    }
+
+    const urlEntries = Object.entries(d.urls ?? {}).filter(([, u]) => u && u.length > 0);
+    if (urlEntries.length) {
+      L.push('各平台会话链接：');
+      for (const [p, u] of urlEntries) {
+        L.push(`- ${PROVIDER_LABELS[p as ProviderName] ?? p}：${u}`);
+      }
       L.push('');
     }
   }

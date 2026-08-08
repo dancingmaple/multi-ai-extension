@@ -48,6 +48,11 @@ export function NodeShell({
   const running = data.status === 'running';
   const [grabbing, setGrabbing] = useState(false);
 
+  // 在浏览器新标签打开 AI 会话（用于回看/溯源）
+  const openUrl = (url?: string) => {
+    if (url) chrome.tabs.create({ url, active: true }).catch(() => window.open(url, '_blank'));
+  };
+
   // 真正拿到正文的平台数（空字符串不算已回答，防止「显示 3/3 实际 1 条」）
   const answeredCount = data.providers.filter(
     (p) => data.outputs[p] && data.outputs[p]!.length > 0
@@ -86,7 +91,7 @@ export function NodeShell({
         <div className="wb-varname">
           <label className="wb-varname__label">变量名</label>
           <input
-            className={`wb-input wb-varname__input ${
+            className={`wb-input wb-varname__input nodrag nowheel ${
               data.varName && !isValidVarName(data.varName) ? 'wb-input--invalid' : ''
             }`}
             value={data.varName ?? ''}
@@ -103,7 +108,7 @@ export function NodeShell({
 
         {editablePrompt && (
           <textarea
-            className="wb-input"
+            className="wb-input nodrag nowheel"
             rows={4}
             value={data.prompt}
             onChange={(e) => updateNodeData(id, { prompt: e.target.value })}
@@ -114,10 +119,10 @@ export function NodeShell({
         {showProviders && (
           <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1">
             {ALL_PROVIDERS.map((p) => (
-              <label key={p} className="flex items-center gap-1 text-[11px] text-slate-200">
+              <label key={p} className="flex items-center gap-1 text-[11px] text-slate-200 nodrag">
                 <input
                   type="checkbox"
-                  className="accent-sky-400"
+                  className="accent-sky-400 nodrag"
                   checked={data.providers.includes(p)}
                   onChange={(e) => {
                     const next = e.target.checked
@@ -133,7 +138,7 @@ export function NodeShell({
         )}
 
         {(data.output || data.error) && (
-          <div className="wb-output">
+          <div className="wb-output nowheel">
             {showProviders && data.providers.length > 0 && (
               <div className="wb-output__meta">
                 ✅ {answeredCount}/{data.providers.length} 已回答
@@ -148,6 +153,26 @@ export function NodeShell({
               <div className="wb-output__warn" title={data.error}>⚠ 部分失败：{data.error.length > 60 ? data.error.slice(0, 57) + '…' : data.error}</div>
             ) : null}
             {data.output && <div className="wb-output__text">{data.output}</div>}
+            {showProviders && data.urls && (() => {
+              const linkProviders = data.providers.filter((p) => data.urls?.[p]);
+              if (linkProviders.length === 0) return null;
+              return (
+                <div className="wb-output__links">
+                  <span className="wb-output__links-label">回看会话：</span>
+                  {linkProviders.map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      className="wb-link"
+                      title={data.urls?.[p]}
+                      onClick={() => openUrl(data.urls?.[p])}
+                    >
+                      🔗 {PROVIDER_LABELS[p]}
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
         )}
 

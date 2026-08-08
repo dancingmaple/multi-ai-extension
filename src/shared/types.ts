@@ -208,6 +208,10 @@ export type WorkbenchExecResult = {
   errors: Partial<Record<ProviderName, string>>;
   /** 本次执行在 background 内部创建的 taskId，便于后续「手动获取」定位各家标签页 */
   taskId?: string;
+  /** 每家 AI 回答完成后所在会话的最终地址（便于回看/溯源），键为 provider */
+  urls?: Partial<Record<ProviderName, string>>;
+  /** 每家 AI 实际运行的标签页 id（forceNew 时为新开标签），键为 provider */
+  tabIds?: Partial<Record<ProviderName, number>>;
 };
 
 /** 工作台节点的手动兜底获取：重新从各家标签页读屏，挽回自动抓取失败的回答 */
@@ -218,12 +222,16 @@ export type WorkbenchGrabMessage = {
   providers: ProviderName[];
   /** 可选：本次节点执行对应的 background taskId，用于精确定位标签页（缺省按域名查找） */
   taskId?: string;
+  /** 可选：本次节点各家 AI 的标签页 id（forceNew 后精确对应，避免多标签串台） */
+  tabIds?: Partial<Record<ProviderName, number>>;
 };
 
 export type WorkbenchGrabResult = {
   ok: boolean;
   outputs: Partial<Record<ProviderName, string>>;
   errors: Partial<Record<ProviderName, string>>;
+  urls?: Partial<Record<ProviderName, string>>;
+  tabIds?: Partial<Record<ProviderName, number>>;
 };
 
 // 受信任点击：Kimi 等站点只接受 isTrusted 事件，content script 无法派发，

@@ -212,7 +212,7 @@ chrome.runtime.onConnectExternal.addListener((port) => {
         const prompt = raw.prompt as string;
         const targets = raw.targets as ProviderName[];
         appendTurn(convId, { id: turnId, prompt, targets })
-          .then(() => handleAskAll(turnId, prompt, targets, convId))
+          .then(() => handleAskAll(turnId, prompt, targets, { convId }))
           .catch((err) => {
             const m = err instanceof Error ? err.message : 'Unknown error';
             post({ type: 'TASK_ERROR', taskId: turnId, provider: targets[0], errorCode: 'ASK_FAILED', errorMessage: m });

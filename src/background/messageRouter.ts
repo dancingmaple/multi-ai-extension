@@ -294,7 +294,7 @@ export async function handleUIMessage(
         broadcastTaskState({ type: 'TASK_STATE_UPDATE', task });
         return undefined;
       }
-      await handleAskAll(msg.turnId, msg.prompt, msg.targets, msg.conversationId);
+      await handleAskAll(msg.turnId, msg.prompt, msg.targets, { convId: msg.conversationId });
       return undefined;
     }
     case 'GET_CONVERSATION': {
@@ -357,7 +357,8 @@ export async function handleUIMessage(
     }
     case 'WORKBENCH_EXECUTE': {
       const providers = (msg.providers ?? []) as ProviderName[];
-      const result = await runWorkbenchExecution(msg.prompt, providers);
+      // 工作台每个节点强制「新会话」：不复用上一个节点的标签页，避免串台/续聊
+      const result = await runWorkbenchExecution(msg.prompt, providers, { forceNew: true });
       return result;
     }
     case 'WORKBENCH_GRAB': {
@@ -365,15 +366,21 @@ export async function handleUIMessage(
       const providers = (msg.providers ?? []) as ProviderName[];
       const prompt = (msg.prompt ?? '') as string;
       const taskId = msg.taskId as string | undefined;
+      const tabIds = (msg.tabIds ?? {}) as Partial<Record<ProviderName, number>>;
       const outputs: Partial<Record<ProviderName, string>> = {};
       const errors: Partial<Record<ProviderName, string>> = {};
+      const urls: Partial<Record<ProviderName, string>> = {};
+      const resolvedTabIds: Partial<Record<ProviderName, number>> = {};
       for (const p of providers) {
-        const g = await grabFromProviderTab(p, prompt, taskId);
+        // 优先用本节点精确对应的标签页，避免多标签串台
+        const g = await grabFromProviderTab(p, prompt, { taskId, tabId: tabIds[p] });
         if (g.ok && g.text) outputs[p] = g.text;
         else errors[p] = g.reason || '未读取到回答文本';
+        if (g.url) urls[p] = g.url;
+        if (g.tabId !== undefined) resolvedTabIds[p] = g.tabId;
       }
       const ok = providers.every((p) => outputs[p] !== undefined && outputs[p]!.length > 0);
-      return { ok, outputs, errors };
+      return { ok, outputs, errors, urls, tabIds: resolvedTabIds };
     }
     case 'RESUME':
     case 'KA':
@@ -426,8 +433,10 @@ export async function handleAskAll(
   taskId: string,
   prompt: string,
   targets: ProviderName[],
-  convId?: string
+  opts?: { convId?: string; forceNew?: boolean }
 ): Promise<void> {
+  const convId = opts?.convId;
+  const forceNew = !!opts?.forceNew;
   let cid = convId ?? getConversationIdForTask(taskId);
   if (!cid) cid = await ensureConversationForTask(taskId);
 
@@ -443,7 +452,7 @@ export async function handleAskAll(
 
   broadcastTaskState({ type: 'TASK_STATE_UPDATE', task });
 
-  const dispatches = targets.map((provider) => dispatchToProvider(taskId, provider, prompt));
+  const dispatches = targets.map((provider) => dispatchToProvider(taskId, provider, prompt, { forceNew }));
   await Promise.allSettled(dispatches);
 }
 
@@ -455,13 +464,18 @@ export async function retryProvider(taskId: string, provider: ProviderName): Pro
   await dispatchToProvider(taskId, provider, task.prompt);
 }
 
-async function dispatchToProvider(taskId: string, provider: ProviderName, prompt: string): Promise<void> {
-  console.log('[MultiAI:background] dispatchToProvider', provider);
+async function dispatchToProvider(
+  taskId: string,
+  provider: ProviderName,
+  prompt: string,
+  opts?: { forceNew?: boolean }
+): Promise<void> {
+  console.log('[MultiAI:background] dispatchToProvider', provider, { forceNew: !!opts?.forceNew });
   try {
     updateProviderStatus(taskId, provider, 'waiting');
     broadcastTaskState({ type: 'TASK_STATE_UPDATE', task: getTask(taskId)! });
 
-    const tabId = await getOrCreateProviderTab(provider);
+    const tabId = await getOrCreateProviderTab(provider, { forceNew: opts?.forceNew });
     console.log('[MultiAI:background] Got tab', tabId, 'for', provider);
     setProviderTabId(taskId, provider, tabId);
 
