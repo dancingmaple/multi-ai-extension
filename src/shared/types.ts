@@ -190,6 +190,24 @@ export type KeepaliveAck = {
   type: 'KA';
 };
 
+// ── 工作台 (Workbench) DAG 工作流执行 ───────────────
+export type WorkbenchNodeType = 'start' | 'summarize' | 'process' | 'end';
+
+export type WorkbenchExecuteMessage = {
+  type: 'WORKBENCH_EXECUTE';
+  nodeId: string;
+  nodeType: WorkbenchNodeType;
+  prompt: string;
+  providers: ProviderName[];
+};
+
+/** Background 对 WORKBENCH_EXECUTE 的同步响应：各目标 AI 的最终回答 */
+export type WorkbenchExecResult = {
+  ok: boolean;
+  outputs: Partial<Record<ProviderName, string>>;
+  errors: Partial<Record<ProviderName, string>>;
+};
+
 // 受信任点击：Kimi 等站点只接受 isTrusted 事件，content script 无法派发，
 // 故由 sidepanel 计算出绝对视口坐标后，让 background 用 chrome.debugger 点击。
 // x/y 为相对于 sidepanel 视口的绝对坐标。
@@ -216,6 +234,7 @@ export type UIMessage =
   | ExportMarkdownMessage
   | ResumeMessage
   | KeepaliveAck
+  | WorkbenchExecuteMessage
   | TrustedClickMessage;
 
 // ── Background → Content ───────────────────────────────

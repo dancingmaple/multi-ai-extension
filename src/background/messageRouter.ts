@@ -35,6 +35,7 @@ import {
 import { manualGrab, manualGrabAll, saveGrabbedText } from './manualGrab';
 import { trustedClickAt } from './trustedClick';
 import { buildMarkdown, fileNameFor } from '../shared/exportMarkdown';
+import { runWorkbenchExecution } from './workbenchEngine';
 import { ALL_PROVIDERS } from '../shared/constants';
 
 console.log('[MultiAI:messageRouter] build=spec-v2 2026-08-02');
@@ -136,6 +137,7 @@ const UI_TYPES = new Set([
   'RESUME',
   'KA',
   'TRUSTED_CLICK',
+  'WORKBENCH_EXECUTE',
 ]);
 const CONTENT_TYPES = new Set(['PROVIDER_STATUS', 'STREAM_UPDATE', 'TASK_DONE', 'TASK_ERROR', 'EMBED_URL']);
 
@@ -346,6 +348,11 @@ export async function handleUIMessage(
         await trustedClickAt(tabId, msg.x as number, msg.y as number);
       }
       return { type: 'ACK' };
+    }
+    case 'WORKBENCH_EXECUTE': {
+      const providers = (msg.providers ?? []) as ProviderName[];
+      const result = await runWorkbenchExecution(msg.prompt, providers);
+      return result;
     }
     case 'RESUME':
     case 'KA':

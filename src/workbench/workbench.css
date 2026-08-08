@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#workbench-root {
+  height: 100%;
+  margin: 0;
+}
+
+#workbench-root {
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+/* ReactFlow 画布铺满容器 */
+.react-flow {
+  background: #0f172a;
+}
+
+/* 节点卡片统一圆角与阴影 */
+.wb-node {
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #1e293b;
+  color: #e2e8f0;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  width: 280px;
+  overflow: hidden;
+}
+
+.wb-node__header {
+  padding: 8px 12px;
+  font-weight: 600;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wb-node__body {
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+.wb-node--start .wb-node__header { background: #16a34a; }
+.wb-node--summarize .wb-node__header { background: #2563eb; }
+.wb-node--process .wb-node__header { background: #9333ea; }
+.wb-node--end .wb-node__header { background: #d97706; }
+
+.wb-node__status {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+.wb-node__status--running { background: #facc15; color: #1f2937; }
+.wb-node__status--success { background: #22c55e; color: #052e16; }
+.wb-node__status--error { background: #ef4444; color: #450a0a; }
+.wb-node__status--reviewing { background: #38bdf8; color: #082f49; }
+
+textarea.wb-input {
+  width: 100%;
+  resize: vertical;
+  background: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.wb-output {
+  margin-top: 8px;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  background: #0f172a;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.5;
+}
