@@ -47,52 +47,46 @@ function grabInPage(args: { prompt: string; provider?: string }): { text: string
   }
 
   /**
-   * 从滚动容器中提取**全部**文本（不只是当前可见部分）。
-   * 浏览器 .innerText 对 overflow:hidden / scroll 容器只返回视口内文本，
-   * 这是 ChatGPT 长回答「只抓到中间一段」的根本原因。
+   * 块级感知的全文提取（核心修复）：直接遍历 DOM 子树，拼接所有文本节点，
+   * 在块级元素前插入换行——效果等同 textContent 但保留段落结构。
    *
-   * 策略：临时保存 scrollTop → 滚到顶 → 读 innerText → 恢复 scrollTop。
+   * 为什么不用 .innerText：innerText 是「渲染文本」，对虚拟化 / overflow 滚动 /
+   * 栅格布局的容器只返回当前布局内可见的文本，长回答必然被截断成「中间一段」。
+   * 而 textContent（本函数用 DOM 遍历实现）返回子树全部文本，永不因滚动或可见性丢失，
+   * 这才是 ChatGPT 等长回答能抓全的根基。
    */
-  function fullInnerText(el: HTMLElement): string {
-    // 检查是否是可滚动容器（内容高度 > 客户端高度）
-    const hasScroll = el.scrollHeight > el.clientHeight + 2;
-    if (!hasScroll) return (el.innerText || '').replace(/\u00a0/g, ' ');
-
-    const savedTop = el.scrollTop;
-    el.scrollTop = 0;
-    // 给浏览器一帧渲染时间（requestAnimationFrame 不可用就同步读）
-    const text = (el.innerText || '').replace(/\u00a0/g, ' ');
-    el.scrollTop = savedTop;
-    return text;
-  }
-
-  /**
-   * 聚合子元素全文：遍历直接子元素取 textContent，不受父容器滚动影响。
-   * 兜底方案，当 fullInnerText 仍不够用时使用。
-   */
-  function aggregateChildText(el: HTMLElement): string {
-    const parts: string[] = [];
+  const BLOCK_TAGS = new Set([
+    'P', 'DIV', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BR', 'TR', 'SECTION',
+    'ARTICLE', 'BLOCKQUOTE', 'PRE', 'UL', 'OL', 'TABLE', 'THEAD', 'TBODY', 'TD', 'TH',
+  ]);
+  const SKIP_TAGS = new Set(['BUTTON', 'SVG', 'IMG', 'INPUT', 'TEXTAREA', 'SELECT', 'SCRIPT', 'STYLE', 'NOSCRIPT', 'PATH']);
+  function blockText(el: HTMLElement): string {
+    let out = '';
     const walk = (node: Node) => {
       if (node.nodeType === Node.TEXT_NODE) {
-        const t = node.textContent?.trim();
-        if (t) parts.push(t);
-      } else if (node.nodeType === Node.ELEMENT_NODE) {
-        const el = node as Element;
-        const tag = el.tagName.toLowerCase();
-        // 跳过脚本、样式、隐藏的 UI 控件
-        if (['script', 'style', 'noscript'].includes(tag)) return;
-        const s = el instanceof HTMLElement ? getComputedStyle(el) : null;
-        if (s && (s.display === 'none' || s.visibility === 'hidden' || +s.opacity === 0)) return;
-        // 跳过按钮/图标等交互元素
-        if (['button', 'svg', 'img', 'input', 'textarea', 'select'].includes(tag)) return;
-        for (const child of Array.from(el.childNodes)) walk(child);
+        out += node.textContent || '';
+        return;
       }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      const e = node as HTMLElement;
+      const tag = e.tagName;
+      if (tag === 'BR') {
+        out += '\n';
+        return;
+      }
+      if (SKIP_TAGS.has(tag)) return;
+      const s = getComputedStyle(e);
+      if (s.display === 'none' || s.visibility === 'hidden' || +s.opacity === 0) return;
+      const before = out.length;
+      for (const child of Array.from(e.childNodes)) walk(child);
+      // 块级元素后补换行（首元素不补）；inline 元素（含 code/a/span）不补，保持词语连贯
+      if (BLOCK_TAGS.has(tag) && out.length > before && !out.endsWith('\n')) out += '\n';
     };
     walk(el);
-    return parts.join('\n').replace(/\u00a0/g, ' ');
+    return out.replace(/\u00a0/g, ' ');
   }
 
-  function pickRoot(): HTMLElement {
+  function pickRoot(): { el: HTMLElement; isAnswer: boolean } {
     const common = [
       '[data-testid="message-list"]',
       '.chat-messages',
@@ -107,13 +101,16 @@ function grabInPage(args: { prompt: string; provider?: string }): { text: string
       zai: ['.chat-content', '.message-list', '.chat-messages', '.conversation-content', 'main[class*="chat"]', 'main'],
       doubao: ['[data-testid="message-list"]', '.chat-messages', '.message-list', 'main'],
       gemini: ['.conversation-container', '.chat-container', 'main', 'body'],
-      /** ChatGPT：动态查找最后一条 assistant 消息，不再硬编码 conversation-turn-2 */
+      /** ChatGPT：动态查找最后一条 assistant 消息（整个元素就是完整回答） */
       chatgpt: [
         () => {
-          // 策略 A：找所有 assistant turn，取最后一条
           const turns = document.querySelectorAll('[data-testid^="conversation-turn-"][data-message-author-role="assistant"]');
           if (turns.length > 0) return turns[turns.length - 1] as HTMLElement | null;
           return null;
+        },
+        () => {
+          const all = document.querySelectorAll('[data-message-author-role="assistant"]');
+          return all.length > 0 ? (all[all.length - 1] as HTMLElement) : null;
         },
         '[data-message-author-role="assistant"]',
         '.markdown.prose',
@@ -135,18 +132,20 @@ function grabInPage(args: { prompt: string; provider?: string }): { text: string
       } else {
         el = document.querySelector(s) as HTMLElement | null;
       }
-      if (el && isVisible(el) && el.innerText.trim().length > 20) return el;
+      if (el && isVisible(el) && blockText(el).trim().length > 20) {
+        // 命中 ChatGPT 的「最后一条 assistant turn」函数选择器 → 此元素就是完整回答
+        const isAnswer = args.provider === 'chatgpt' && typeof s === 'function';
+        return { el, isAnswer };
+      }
     }
-    return document.body;
+    return { el: document.body, isAnswer: false };
   }
 
   const clean = (s: string) => s.replace(/\u00a0/g, ' ');
-  const root = pickRoot();
+  const { el: root, isAnswer } = pickRoot();
 
-  // 优先用 fullInnerText（处理滚动容器），回退到 aggregateChildText（最彻底）
-  let raw = clean(fullInnerText(root));
-  if (raw.length < 20) raw = clean(aggregateChildText(root));
-  if (raw.length < 20) raw = clean(root.innerText || document.body.innerText || '');
+  // 用 blockText 取全文（DOM 遍历，永不因滚动/虚拟化丢失文本）
+  const raw = clean(blockText(root));
 
   const lines = raw.split('\n').map((s) => s.trim()).filter((s) => s.length > 0);
 
@@ -172,6 +171,13 @@ function grabInPage(args: { prompt: string; provider?: string }): { text: string
     }
     return -1;
   };
+
+  // —— ChatGPT 等「root 已是完整回答元素」的快捷路径：blockText 已是全文，直接裁头尾 ——
+  if (isAnswer) {
+    const body = trimHeadTail([...lines]).join('\n').trim();
+    if (body.length > 8) return { text: body, method: 'direct' };
+    // 极端情况：裁完太短，退化为通用剪刀法（用 blockText 的全文，不会截断）
+  }
 
   const key = (args.prompt || '').replace(/\s/g, '').slice(0, 12);
   let q = -1;
@@ -264,7 +270,10 @@ export async function grabFromProviderTab(
     } catch {
       /* 标签已关闭 */
     }
-    if (text) return { ok: true, text, method: got.method, url, tabId };
+    if (text) {
+      console.log(`[MultiAI:grab] provider=${provider} method=${got.method} chars=${text.length} tabId=${tabId}`);
+      return { ok: true, text, method: got.method, url, tabId };
+    }
     return { ok: false, text: '', reason: got.reason || '页面当前没有可读取的回答文本', url, tabId };
   } catch (e) {
     return { ok: false, text: '', reason: e instanceof Error ? e.message : String(e), tabId };
