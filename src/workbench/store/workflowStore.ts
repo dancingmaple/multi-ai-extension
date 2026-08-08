@@ -192,14 +192,23 @@ function sendWorkbenchExecute(
       providers,
     };
     try {
+      console.log('[Workbench:store] 发送 WORKBENCH_EXECUTE', { nodeId, nodeType, providers, promptLen: prompt.length });
       chrome.runtime.sendMessage(msg, (resp: WorkbenchExecResult) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
+        const lastErr = chrome.runtime.lastError?.message;
+        console.log('[Workbench:store] 收到响应', {
+          respType: typeof resp,
+          respKeys: resp ? Object.keys(resp) : null,
+          lastError: lastErr ?? null,
+          respSnapshot: resp ? { ok: resp.ok, outKeys: Object.keys(resp.outputs ?? {}), errKeys: Object.keys(resp.errors ?? {}) } : null,
+        });
+        if (lastErr) {
+          reject(new Error(lastErr));
         } else {
           resolve(resp);
         }
       });
     } catch (e) {
+      console.error('[Workbench:store] sendMessage throw:', e);
       reject(e instanceof Error ? e : new Error(String(e)));
     }
   });

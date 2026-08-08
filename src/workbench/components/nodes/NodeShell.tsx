@@ -95,9 +95,9 @@ export function NodeShell({
               </div>
             )}
             {data.error && data.status === 'error' ? (
-              <div className="wb-output__err">❌ {data.error}</div>
+              <div className="wb-output__err" title={data.error}>❌ {data.error.length > 80 ? data.error.slice(0, 77) + '…' : data.error}</div>
             ) : data.error ? (
-              <div className="wb-output__warn">⚠ 部分失败：{data.error}</div>
+              <div className="wb-output__warn" title={data.error}>⚠ 部分失败：{data.error.length > 60 ? data.error.slice(0, 57) + '…' : data.error}</div>
             ) : null}
             {data.output && <div className="wb-output__text">{data.output}</div>}
           </div>

@@ -163,7 +163,12 @@ chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
     }
     handleUIMessage(msg as UIMessage, sender)
       .then((resp) => sendResponse(resp))
-      .catch(() => sendResponse());
+      .catch((err) => {
+        // 不再吞掉错误（之前 sendResponse() 无参数 → 前端收到 undefined → "无响应"）
+        const errMsg = err instanceof Error ? err.message : String(err ?? 'unknown');
+        console.error('[MultiAI:background] handleUIMessage error for', msg.type, ':', errMsg);
+        sendResponse({ ok: false, outputs: {}, errors: { _system: errMsg } });
+      });
     return true;
   }
 
