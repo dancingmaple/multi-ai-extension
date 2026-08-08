@@ -55,9 +55,27 @@ export function extractAnswer(pageText: string, prompt: string): GrabResult {
       }
     }
   }
+
+  /**
+   * 改进的 STOP 截断：要求**连续 3 行**都匹配 STOP 模式才截断，
+   * 避免正文中某一行偶然命中 footer 关键词就把整个后半段回答丢掉。
+   */
+  const findStopIndex = (arr: string[]): number => {
+    let consecutive = 0;
+    for (let i = 0; i < arr.length; i++) {
+      if (STOP_FOOTER.test(arr[i])) {
+        consecutive++;
+        if (consecutive >= 3) return i - 2;
+      } else {
+        consecutive = 0;
+      }
+    }
+    return -1;
+  };
+
   if (q >= 0 && q < lines.length - 1) {
     const rawBody = lines.slice(q + 1);
-    const stopIdx = rawBody.findIndex((l) => STOP_FOOTER.test(l));
+    const stopIdx = findStopIndex(rawBody);
     const body = trimHeadTail(stopIdx >= 0 ? rawBody.slice(0, stopIdx) : rawBody)
       .join('\n')
       .trim();
@@ -66,7 +84,7 @@ export function extractAnswer(pageText: string, prompt: string): GrabResult {
 
   // 2) 兜底：取页面后半段（回答通常在下方），宁可多带上下文也不抓空
   const rawHalf = lines.slice(Math.floor(lines.length / 2));
-  const stopIdx2 = rawHalf.findIndex((l) => STOP_FOOTER.test(l));
+  const stopIdx2 = findStopIndex(rawHalf);
   const half = trimHeadTail(stopIdx2 >= 0 ? rawHalf.slice(0, stopIdx2) : rawHalf)
     .join('\n')
     .trim();

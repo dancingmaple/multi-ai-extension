@@ -24,6 +24,11 @@ const DOMAIN_PATTERN: Record<string, string> = {
  * 注入函数（必须自包含，不依赖任何模块/import）：
  * 读整页可见文本 → 用提问当剪刀剪出回答 → 剪不到兜底取页面后半段 →
  * 裁掉头尾元信息 + 页面 footer/免责声明。宁可抓糙，绝不抓空。
+ *
+ * [2026-08 修复] 解决 ChatGPT 等长回答「只抓到中间一段」的问题：
+ *   1) 选择器不再硬编码 turn 编号，改为动态查找最后一条 assistant 消息；
+ *   2) 对滚动容器先临时滚到顶再读 innerText，恢复原位——解决 .innerText 只返回可见文本的浏览器特性；
+ *   3) STOP 截断改为「连续 N 行匹配才截断」，避免正文内部误切。
  */
 function grabInPage(args: { prompt: string; provider?: string }): { text: string; method: string; reason?: string } {
   const HEAD =
@@ -41,6 +46,52 @@ function grabInPage(args: { prompt: string; provider?: string }): { text: string
     return s.visibility !== 'hidden' && s.display !== 'none' && +s.opacity > 0.01;
   }
 
+  /**
+   * 从滚动容器中提取**全部**文本（不只是当前可见部分）。
+   * 浏览器 .innerText 对 overflow:hidden / scroll 容器只返回视口内文本，
+   * 这是 ChatGPT 长回答「只抓到中间一段」的根本原因。
+   *
+   * 策略：临时保存 scrollTop → 滚到顶 → 读 innerText → 恢复 scrollTop。
+   */
+  function fullInnerText(el: HTMLElement): string {
+    // 检查是否是可滚动容器（内容高度 > 客户端高度）
+    const hasScroll = el.scrollHeight > el.clientHeight + 2;
+    if (!hasScroll) return (el.innerText || '').replace(/\u00a0/g, ' ');
+
+    const savedTop = el.scrollTop;
+    el.scrollTop = 0;
+    // 给浏览器一帧渲染时间（requestAnimationFrame 不可用就同步读）
+    const text = (el.innerText || '').replace(/\u00a0/g, ' ');
+    el.scrollTop = savedTop;
+    return text;
+  }
+
+  /**
+   * 聚合子元素全文：遍历直接子元素取 textContent，不受父容器滚动影响。
+   * 兜底方案，当 fullInnerText 仍不够用时使用。
+   */
+  function aggregateChildText(el: HTMLElement): string {
+    const parts: string[] = [];
+    const walk = (node: Node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const t = node.textContent?.trim();
+        if (t) parts.push(t);
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        const el = node as Element;
+        const tag = el.tagName.toLowerCase();
+        // 跳过脚本、样式、隐藏的 UI 控件
+        if (['script', 'style', 'noscript'].includes(tag)) return;
+        const s = el instanceof HTMLElement ? getComputedStyle(el) : null;
+        if (s && (s.display === 'none' || s.visibility === 'hidden' || +s.opacity === 0)) return;
+        // 跳过按钮/图标等交互元素
+        if (['button', 'svg', 'img', 'input', 'textarea', 'select'].includes(tag)) return;
+        for (const child of Array.from(el.childNodes)) walk(child);
+      }
+    };
+    walk(el);
+    return parts.join('\n').replace(/\u00a0/g, ' ');
+  }
+
   function pickRoot(): HTMLElement {
     const common = [
       '[data-testid="message-list"]',
@@ -52,18 +103,38 @@ function grabInPage(args: { prompt: string; provider?: string }): { text: string
       'main[class*="chat"]',
       'main',
     ];
-    const providerRoots: Record<string, string[]> = {
+    const providerRoots: Record<string, (string | (() => HTMLElement | null))[]> = {
       zai: ['.chat-content', '.message-list', '.chat-messages', '.conversation-content', 'main[class*="chat"]', 'main'],
       doubao: ['[data-testid="message-list"]', '.chat-messages', '.message-list', 'main'],
       gemini: ['.conversation-container', '.chat-container', 'main', 'body'],
-      chatgpt: ['[data-testid="conversation-turn-2"]', '.conversation-content', 'main', 'body'],
+      /** ChatGPT：动态查找最后一条 assistant 消息，不再硬编码 conversation-turn-2 */
+      chatgpt: [
+        () => {
+          // 策略 A：找所有 assistant turn，取最后一条
+          const turns = document.querySelectorAll('[data-testid^="conversation-turn-"][data-message-author-role="assistant"]');
+          if (turns.length > 0) return turns[turns.length - 1] as HTMLElement | null;
+          return null;
+        },
+        '[data-message-author-role="assistant"]',
+        '.markdown.prose',
+        '.markdown',
+        '[class*="agent-turn"]',
+        '.conversation-content',
+        'main',
+        'body',
+      ],
       deepseek: ['.chat-messages', '.message-list', 'main', 'body'],
       qwen: ['.chat-messages', '.message-list', 'main', 'body'],
       kimi: ['.chat-content', '.message-list', '.chat-messages', '.conversation-content', 'main[class*="chat"]', 'main'],
     };
     const order = args.provider && providerRoots[args.provider] ? providerRoots[args.provider] : common;
     for (const s of order) {
-      const el = document.querySelector(s) as HTMLElement | null;
+      let el: HTMLElement | null = null;
+      if (typeof s === 'function') {
+        el = s();
+      } else {
+        el = document.querySelector(s) as HTMLElement | null;
+      }
       if (el && isVisible(el) && el.innerText.trim().length > 20) return el;
     }
     return document.body;
@@ -71,13 +142,35 @@ function grabInPage(args: { prompt: string; provider?: string }): { text: string
 
   const clean = (s: string) => s.replace(/\u00a0/g, ' ');
   const root = pickRoot();
-  const raw = clean(root.innerText || document.body.innerText || '');
+
+  // 优先用 fullInnerText（处理滚动容器），回退到 aggregateChildText（最彻底）
+  let raw = clean(fullInnerText(root));
+  if (raw.length < 20) raw = clean(aggregateChildText(root));
+  if (raw.length < 20) raw = clean(root.innerText || document.body.innerText || '');
+
   const lines = raw.split('\n').map((s) => s.trim()).filter((s) => s.length > 0);
 
   const trimHeadTail = (arr: string[]) => {
     while (arr.length && HEAD.test(arr[0])) arr.shift();
     while (arr.length && TAIL.test(arr[arr.length - 1])) arr.pop();
     return arr;
+  };
+
+  /**
+   * 改进的 STOP 截断：要求**连续 3 行**都匹配 STOP 模式才截断，
+   * 避免正文中某一行偶然命中 footer 关键词就把整个后半段丢掉。
+   */
+  const findStopIndex = (arr: string[]): number => {
+    let consecutive = 0;
+    for (let i = 0; i < arr.length; i++) {
+      if (STOP.test(arr[i])) {
+        consecutive++;
+        if (consecutive >= 3) return i - 2; // 截断到连续段的起始行
+      } else {
+        consecutive = 0;
+      }
+    }
+    return -1;
   };
 
   const key = (args.prompt || '').replace(/\s/g, '').slice(0, 12);
@@ -91,12 +184,12 @@ function grabInPage(args: { prompt: string; provider?: string }): { text: string
     }
   if (q >= 0 && q < lines.length - 1) {
     const rawBody = lines.slice(q + 1);
-    const stopIdx = rawBody.findIndex((l) => STOP.test(l));
+    const stopIdx = findStopIndex(rawBody);
     const body = trimHeadTail(stopIdx >= 0 ? rawBody.slice(0, stopIdx) : rawBody).join('\n').trim();
     if (body.length > 8) return { text: body, method: 'scissor' };
   }
   const rawHalf = lines.slice(Math.floor(lines.length / 2));
-  const stopIdx2 = rawHalf.findIndex((l) => STOP.test(l));
+  const stopIdx2 = findStopIndex(rawHalf);
   const half = trimHeadTail(stopIdx2 >= 0 ? rawHalf.slice(0, stopIdx2) : rawHalf).join('\n').trim();
   if (half.length > 8) return { text: half, method: 'tail-fallback' };
 

@@ -18,11 +18,22 @@ const COMMON_ROOTS = [
   'main',
 ];
 
-const PROVIDER_ROOTS: Record<string, string[]> = {
+const PROVIDER_ROOTS: Record<string, (string | (() => Element | null))[]> = {
   zai: ['.chat-content', '.message-list', '.chat-messages', '.conversation-content', 'main[class*="chat"]', 'main'],
   doubao: ['[data-testid="message-list"]', '.chat-messages', '.message-list', 'main'],
   gemini: ['.conversation-container', 'chat-window', '.chat-container', 'main'],
-  chatgpt: ['[role="presentation"] .flex.flex-col', 'main .flex.flex-col', 'main'],
+  /** ChatGPT：动态查找最后一条 assistant 消息，不再硬编码 turn 编号 */
+  chatgpt: [
+    () => {
+      const turns = document.querySelectorAll('[data-testid^="conversation-turn-"][data-message-author-role="assistant"]');
+      return turns.length > 0 ? turns[turns.length - 1] : null;
+    },
+    '[data-message-author-role="assistant"]',
+    '.markdown.prose',
+    '[role="presentation"] .flex.flex-col',
+    'main .flex.flex-col',
+    'main',
+  ],
   deepseek: ['.chat-messages', '.message-list', 'main'],
   qwen: ['.chat-messages', '.message-list', 'main'],
   kimi: ['.chat-content', '.message-list', '.chat-messages', '.conversation-content', 'main[class*="chat"]', 'main'],
@@ -36,10 +47,28 @@ function isVisible(el: Element | null): boolean {
   return s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0.01;
 }
 
+/**
+ * 从滚动容器提取全部文本（解决 .innerText 只返回可见部分的问题）。
+ */
+function fullInnerText(el: HTMLElement): string {
+  if (el.scrollHeight <= el.clientHeight + 2) return (el.innerText || '').replace(/\u00a0/g, ' ');
+  const savedTop = el.scrollTop;
+  el.scrollTop = 0;
+  const text = (el.innerText || '').replace(/\u00a0/g, ' ');
+  el.scrollTop = savedTop;
+  return text;
+}
+
 function pickRoot(provider: ProviderName | null): HTMLElement {
   const order = provider && PROVIDER_ROOTS[provider] ? PROVIDER_ROOTS[provider] : COMMON_ROOTS;
   for (const sel of order) {
-    const el = document.querySelector(sel) as HTMLElement | null;
+    let el: HTMLElement | null = null;
+    if (typeof sel === 'function') {
+      const r = sel();
+      el = r instanceof HTMLElement ? r : null;
+    } else {
+      el = document.querySelector(sel) as HTMLElement | null;
+    }
     if (el && isVisible(el) && (el.innerText || '').trim().length > 20) return el;
   }
   return document.body;
@@ -52,7 +81,9 @@ export function grabLocal(provider: ProviderName | null, prompt: string): GrabRe
   } catch {
     root = document.body;
   }
-  const text = (root.innerText || document.body.innerText || '').trim();
+  // 优先 fullInnerText（处理滚动截断），回退到普通 innerText
+  let text = fullInnerText(root).trim();
+  if (!text) text = (root.innerText || document.body.innerText || '').trim();
   if (!text) {
     return { text: '', method: 'none', reason: '页面文本为空（网页可能还没加载完，或被站点的嵌入限制挡住了）' };
   }
