@@ -6,6 +6,7 @@ import {
   finishProviderTask,
   failProviderTask,
 } from './stateStore';
+import { getRegisteredTabId } from './tabManager';
 import { broadcastTaskState } from '../shared/messaging';
 import { upsertAnswer } from './conversationStore';
 
@@ -115,15 +116,22 @@ export { grabInPage };
 /**
  * 纯读屏：找到指定 provider 的标签页，执行 grabInPage 读回回答文本。
  * 不写会话/运行时，供工作台「手动获取」等旁路场景复用（只是兜底读，不沉淀）。
- * 定位优先级：显式传入的 tabId（forceNew 后精确对应，避免多标签串台）
- * > taskId 记录的 tabId > 按域名在全部标签页里查找（兜底）。
+ * 定位优先级（确保多标签场景下抓到「对」的那张）：
+ *   1) 显式传入的 tabId（节点精确记录的专属 tab）
+ *   2) nodeId 在登记表里对应的专属 tab（解决「同 provider 多 tab 串台」）
+ *   3) taskId 记录的 tabId
+ *   4) 按域名在全部标签页里查找（兜底）
  */
 export async function grabFromProviderTab(
   provider: ProviderName,
   prompt: string,
-  opts?: { taskId?: string; tabId?: number }
+  opts?: { taskId?: string; tabId?: number; nodeId?: string }
 ): Promise<{ ok: boolean; text: string; method?: string; reason?: string; url?: string; tabId?: number }> {
   let tabId: number | undefined = opts?.tabId;
+
+  if (tabId === undefined && opts?.nodeId !== undefined) {
+    tabId = getRegisteredTabId(opts.nodeId, provider);
+  }
   if (tabId === undefined && opts?.taskId !== undefined) {
     tabId = getTask(opts.taskId)?.providers?.[provider]?.tabId;
   }

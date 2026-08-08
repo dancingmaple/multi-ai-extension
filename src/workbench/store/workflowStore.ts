@@ -364,13 +364,14 @@ function sendWorkbenchExecute(
 function sendWorkbenchGrab(
   prompt: string,
   providers: ProviderName[],
+  nodeId: string,
   taskId?: string,
   tabIds?: Partial<Record<ProviderName, number>>
 ): Promise<WorkbenchGrabResult> {
   return new Promise((resolve, reject) => {
     const msg: WorkbenchGrabMessage = {
       type: 'WORKBENCH_GRAB',
-      nodeId: '',
+      nodeId,
       prompt,
       providers,
       taskId,
@@ -503,7 +504,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
     get().updateNodeData(id, { error: undefined });
     try {
-      const result = await sendWorkbenchGrab(sendPrompt, providers, taskId, prevTabIds);
+      const result = await sendWorkbenchGrab(sendPrompt, providers, id, taskId, prevTabIds);
       // 合并：保留已有回答，仅用地动抓取成功的内容补全缺失项
       const merged: Partial<Record<ProviderName, string>> = { ...(prevOutputs as Record<ProviderName, string>) };
       const errs: Partial<Record<ProviderName, string>> = {};

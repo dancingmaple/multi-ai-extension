@@ -210,7 +210,7 @@ export type WorkbenchExecResult = {
   taskId?: string;
   /** 每家 AI 回答完成后所在会话的最终地址（便于回看/溯源），键为 provider */
   urls?: Partial<Record<ProviderName, string>>;
-  /** 每家 AI 实际运行的标签页 id（forceNew 时为新开标签），键为 provider */
+  /** 每家 AI 实际运行的标签页 id（按 节点+平台 登记的唯一专属 tab），键为 provider */
   tabIds?: Partial<Record<ProviderName, number>>;
 };
 
@@ -222,7 +222,7 @@ export type WorkbenchGrabMessage = {
   providers: ProviderName[];
   /** 可选：本次节点执行对应的 background taskId，用于精确定位标签页（缺省按域名查找） */
   taskId?: string;
-  /** 可选：本次节点各家 AI 的标签页 id（forceNew 后精确对应，避免多标签串台） */
+  /** 可选：本次节点各家 AI 的标签页 id（按 节点+平台 登记的唯一专属 tab，避免多标签串台） */
   tabIds?: Partial<Record<ProviderName, number>>;
 };
 

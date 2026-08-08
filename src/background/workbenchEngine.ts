@@ -20,7 +20,7 @@ function sleep(ms: number): Promise<void> {
 export async function runWorkbenchExecution(
   prompt: string,
   providers: ProviderName[],
-  opts?: { forceNew?: boolean }
+  opts?: { nodeId?: string }
 ): Promise<WorkbenchExecResult> {
   const taskId = `wb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const outputs: Partial<Record<ProviderName, string>> = {};
@@ -30,8 +30,9 @@ export async function runWorkbenchExecution(
     return { ok: false, outputs, errors: { _empty: '未选择任何 AI' } as Partial<Record<ProviderName, string>> };
   }
 
-  console.log('[Workbench:engine] 开始执行', { taskId, providers, forceNew: !!opts?.forceNew });
-  await handleAskAll(taskId, prompt, providers, { forceNew: opts?.forceNew });
+  console.log('[Workbench:engine] 开始执行', { taskId, providers, nodeId: opts?.nodeId });
+  // 透传 nodeId：让后台为「这个节点」复用 / 新建其专属标签页（每节点独立会话，不串台）
+  await handleAskAll(taskId, prompt, providers, { nodeId: opts?.nodeId });
 
   // 取各家超时上限 + 余量作为总等待上限
   const maxPer = Math.max(...providers.map((p) => DEFAULT_SETTINGS.responseTimeoutMs[p] ?? 60000));

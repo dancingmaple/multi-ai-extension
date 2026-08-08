@@ -357,8 +357,9 @@ export async function handleUIMessage(
     }
     case 'WORKBENCH_EXECUTE': {
       const providers = (msg.providers ?? []) as ProviderName[];
-      // 工作台每个节点强制「新会话」：不复用上一个节点的标签页，避免串台/续聊
-      const result = await runWorkbenchExecution(msg.prompt, providers, { forceNew: true });
+      // 工作台每个节点用「专属标签页」：透传 nodeId，后台据此复用/新建该节点的专属 tab，
+      // 既保证每节点独立新会话（不串台），又不会每次都新开标签堆满浏览器。
+      const result = await runWorkbenchExecution(msg.prompt, providers, { nodeId: msg.nodeId as string | undefined });
       return result;
     }
     case 'WORKBENCH_GRAB': {
@@ -366,14 +367,16 @@ export async function handleUIMessage(
       const providers = (msg.providers ?? []) as ProviderName[];
       const prompt = (msg.prompt ?? '') as string;
       const taskId = msg.taskId as string | undefined;
+      const nodeId = msg.nodeId as string | undefined;
       const tabIds = (msg.tabIds ?? {}) as Partial<Record<ProviderName, number>>;
       const outputs: Partial<Record<ProviderName, string>> = {};
       const errors: Partial<Record<ProviderName, string>> = {};
       const urls: Partial<Record<ProviderName, string>> = {};
       const resolvedTabIds: Partial<Record<ProviderName, number>> = {};
       for (const p of providers) {
-        // 优先用本节点精确对应的标签页，避免多标签串台
-        const g = await grabFromProviderTab(p, prompt, { taskId, tabId: tabIds[p] });
+        // 解析优先级：显式 tabId > 本节点登记的专属 tab > taskId > 域名查找，
+        // 确保多标签场景下一定抓到「这个节点」对应的那张页面。
+        const g = await grabFromProviderTab(p, prompt, { nodeId, taskId, tabId: tabIds[p] });
         if (g.ok && g.text) outputs[p] = g.text;
         else errors[p] = g.reason || '未读取到回答文本';
         if (g.url) urls[p] = g.url;
@@ -433,10 +436,11 @@ export async function handleAskAll(
   taskId: string,
   prompt: string,
   targets: ProviderName[],
-  opts?: { convId?: string; forceNew?: boolean }
+  opts?: { convId?: string; forceNew?: boolean; nodeId?: string }
 ): Promise<void> {
   const convId = opts?.convId;
   const forceNew = !!opts?.forceNew;
+  const nodeId = opts?.nodeId;
   let cid = convId ?? getConversationIdForTask(taskId);
   if (!cid) cid = await ensureConversationForTask(taskId);
 
@@ -452,7 +456,7 @@ export async function handleAskAll(
 
   broadcastTaskState({ type: 'TASK_STATE_UPDATE', task });
 
-  const dispatches = targets.map((provider) => dispatchToProvider(taskId, provider, prompt, { forceNew }));
+  const dispatches = targets.map((provider) => dispatchToProvider(taskId, provider, prompt, { forceNew, nodeId }));
   await Promise.allSettled(dispatches);
 }
 
@@ -468,14 +472,15 @@ async function dispatchToProvider(
   taskId: string,
   provider: ProviderName,
   prompt: string,
-  opts?: { forceNew?: boolean }
+  opts?: { forceNew?: boolean; nodeId?: string }
 ): Promise<void> {
-  console.log('[MultiAI:background] dispatchToProvider', provider, { forceNew: !!opts?.forceNew });
+  console.log('[MultiAI:background] dispatchToProvider', provider, { nodeId: opts?.nodeId ?? null, forceNew: !!opts?.forceNew });
   try {
     updateProviderStatus(taskId, provider, 'waiting');
     broadcastTaskState({ type: 'TASK_STATE_UPDATE', task: getTask(taskId)! });
 
-    const tabId = await getOrCreateProviderTab(provider, { forceNew: opts?.forceNew });
+    // nodeId 存在时复用 / 新建该节点的专属标签页；否则走侧边栏的常规复用逻辑
+    const tabId = await getOrCreateProviderTab(provider, { forceNew: opts?.forceNew, nodeId: opts?.nodeId });
     console.log('[MultiAI:background] Got tab', tabId, 'for', provider);
     setProviderTabId(taskId, provider, tabId);
 
