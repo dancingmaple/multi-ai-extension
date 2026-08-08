@@ -3,6 +3,7 @@
 // 四种节点的共享外壳：标题栏 + 状态徽标 + 提示词编辑 +
 // 可选 AI 平台选择 + 输出区 + 运行/采纳/重试操作 + 连线桩。
 // ============================================================
+import { useState } from 'react';
 import { Handle, Position } from 'reactflow';
 import type { WorkbenchNodeData } from '../../store/workflowStore';
 import { useWorkflowStore } from '../../store/workflowStore';
@@ -43,7 +44,31 @@ export function NodeShell({
   const updateNodeData = useWorkflowStore((s) => s.updateNodeData);
   const executeNode = useWorkflowStore((s) => s.executeNode);
   const confirmNode = useWorkflowStore((s) => s.confirmNode);
+  const grabNodeAnswers = useWorkflowStore((s) => s.grabNodeAnswers);
   const running = data.status === 'running';
+  const [grabbing, setGrabbing] = useState(false);
+
+  // 真正拿到正文的平台数（空字符串不算已回答，防止「显示 3/3 实际 1 条」）
+  const answeredCount = data.providers.filter(
+    (p) => data.outputs[p] && data.outputs[p]!.length > 0
+  ).length;
+  // 自动抓取后仍可能缺失的回答：已勾选平台中尚未拿到正文的
+  const canGrab =
+    showProviders &&
+    data.providers.length > 0 &&
+    data.status !== 'idle' &&
+    data.status !== 'running';
+  const missingCount = data.providers.length - answeredCount;
+
+  const onGrab = async () => {
+    if (grabbing) return;
+    setGrabbing(true);
+    try {
+      await grabNodeAnswers(id);
+    } finally {
+      setGrabbing(false);
+    }
+  };
 
   return (
     <div className={`wb-node wb-node--${accent} ${selected ? 'ring-2 ring-sky-400' : ''}`}>
@@ -111,7 +136,10 @@ export function NodeShell({
           <div className="wb-output">
             {showProviders && data.providers.length > 0 && (
               <div className="wb-output__meta">
-                ✅ {Object.keys(data.outputs).length}/{data.providers.length} 已回答
+                ✅ {answeredCount}/{data.providers.length} 已回答
+                {missingCount > 0 && (
+                  <span className="wb-output__missing">（{missingCount} 个未取到，可手动获取）</span>
+                )}
               </div>
             )}
             {data.error && data.status === 'error' ? (
@@ -131,6 +159,16 @@ export function NodeShell({
           >
             {running ? '运行中…' : '运行'}
           </button>
+          {canGrab && (
+            <button
+              className="rounded bg-amber-500 px-2 py-1 text-[11px] font-medium text-white hover:bg-amber-400 disabled:opacity-50"
+              disabled={grabbing}
+              onClick={() => void onGrab()}
+              title="自动抓取可能漏掉回答：从各家标签页重新读屏补全"
+            >
+              {grabbing ? '获取中…' : missingCount > 0 ? '手动获取' : '重新获取'}
+            </button>
+          )}
           {data.status === 'reviewing' && (
             <button
               className="rounded bg-emerald-500 px-2 py-1 text-[11px] font-medium text-white hover:bg-emerald-400"

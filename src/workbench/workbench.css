@@ -117,6 +117,9 @@ textarea.wb-input {
   font-size: 11px;
   line-height: 1.5;
 }
+.wb-output__missing {
+  color: #fbbf24;
+}
 
 /* ── 浮层 / 模态 ─────────────────────────────── */
 .wb-overlay {

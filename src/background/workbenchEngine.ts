@@ -44,9 +44,16 @@ export async function runWorkbenchExecution(
       for (const p of providers) {
         const st = task.providers[p]?.status;
         if (st === 'done') {
-          if (outputs[p] === undefined) {
-            outputs[p] = task.providers[p].content;
-            console.log('[Workbench:engine]', p, 'done (len=' + (outputs[p] || '').length + ')');
+          const content = task.providers[p]?.content ?? '';
+          // 关键：done 但内容为空属于「抓取失败/未渲染完」，不能算成功；
+          // 留作未落定，最终记为超时错误，便于用户用「手动获取」补救。
+          if (content.trim().length > 0) {
+            if (outputs[p] === undefined) {
+              outputs[p] = content;
+              console.log('[Workbench:engine]', p, 'done (len=' + content.length + ')');
+            }
+          } else {
+            allSettled = false;
           }
         } else if (st === 'error' || st === 'login_required') {
           if (errors[p] === undefined) {
@@ -62,7 +69,8 @@ export async function runWorkbenchExecution(
     await sleep(400);
   }
 
-  // 超时仍未落定（仍在 sending/waiting）的 provider，记为明确超时错误，便于排查
+  // 超时仍未落定（仍在 sending/waiting，或 done 但内容为空）的 provider，
+  // 记为明确超时错误，便于排查，也提示用户可「手动获取」。
   for (const p of providers) {
     if (outputs[p] === undefined && errors[p] === undefined) {
       errors[p] = `超时（>${budgetSec}s 无响应，可能未登录 / 网络不通 / 受信任点击未触发）`;
@@ -76,5 +84,5 @@ export async function runWorkbenchExecution(
     answered: Object.keys(outputs),
     failed: Object.keys(errors),
   });
-  return { ok, outputs, errors };
+  return { ok, outputs, errors, taskId };
 }

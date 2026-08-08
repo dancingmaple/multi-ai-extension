@@ -32,7 +32,7 @@ import {
   deleteConversation,
   loadConversations,
 } from './conversationStore';
-import { manualGrab, manualGrabAll, saveGrabbedText } from './manualGrab';
+import { manualGrab, manualGrabAll, saveGrabbedText, grabFromProviderTab } from './manualGrab';
 import { trustedClickAt } from './trustedClick';
 import { buildMarkdown, fileNameFor } from '../shared/exportMarkdown';
 import { runWorkbenchExecution } from './workbenchEngine';
@@ -138,6 +138,7 @@ const UI_TYPES = new Set([
   'KA',
   'TRUSTED_CLICK',
   'WORKBENCH_EXECUTE',
+  'WORKBENCH_GRAB',
 ]);
 const CONTENT_TYPES = new Set(['PROVIDER_STATUS', 'STREAM_UPDATE', 'TASK_DONE', 'TASK_ERROR', 'EMBED_URL']);
 
@@ -358,6 +359,21 @@ export async function handleUIMessage(
       const providers = (msg.providers ?? []) as ProviderName[];
       const result = await runWorkbenchExecution(msg.prompt, providers);
       return result;
+    }
+    case 'WORKBENCH_GRAB': {
+      // 手动兜底：重新从各家标签页读屏，挽回自动抓取失败的回答
+      const providers = (msg.providers ?? []) as ProviderName[];
+      const prompt = (msg.prompt ?? '') as string;
+      const taskId = msg.taskId as string | undefined;
+      const outputs: Partial<Record<ProviderName, string>> = {};
+      const errors: Partial<Record<ProviderName, string>> = {};
+      for (const p of providers) {
+        const g = await grabFromProviderTab(p, prompt, taskId);
+        if (g.ok && g.text) outputs[p] = g.text;
+        else errors[p] = g.reason || '未读取到回答文本';
+      }
+      const ok = providers.every((p) => outputs[p] !== undefined && outputs[p]!.length > 0);
+      return { ok, outputs, errors };
     }
     case 'RESUME':
     case 'KA':

@@ -206,6 +206,24 @@ export type WorkbenchExecResult = {
   ok: boolean;
   outputs: Partial<Record<ProviderName, string>>;
   errors: Partial<Record<ProviderName, string>>;
+  /** 本次执行在 background 内部创建的 taskId，便于后续「手动获取」定位各家标签页 */
+  taskId?: string;
+};
+
+/** 工作台节点的手动兜底获取：重新从各家标签页读屏，挽回自动抓取失败的回答 */
+export type WorkbenchGrabMessage = {
+  type: 'WORKBENCH_GRAB';
+  nodeId: string;
+  prompt: string;
+  providers: ProviderName[];
+  /** 可选：本次节点执行对应的 background taskId，用于精确定位标签页（缺省按域名查找） */
+  taskId?: string;
+};
+
+export type WorkbenchGrabResult = {
+  ok: boolean;
+  outputs: Partial<Record<ProviderName, string>>;
+  errors: Partial<Record<ProviderName, string>>;
 };
 
 // 受信任点击：Kimi 等站点只接受 isTrusted 事件，content script 无法派发，
@@ -235,6 +253,7 @@ export type UIMessage =
   | ResumeMessage
   | KeepaliveAck
   | WorkbenchExecuteMessage
+  | WorkbenchGrabMessage
   | TrustedClickMessage;
 
 // ── Background → Content ───────────────────────────────

@@ -112,6 +112,45 @@ function grabInPage(args: { prompt: string; provider?: string }): { text: string
 
 export { grabInPage };
 
+/**
+ * 纯读屏：找到指定 provider 的标签页，执行 grabInPage 读回回答文本。
+ * 不写会话/运行时，供工作台「手动获取」等旁路场景复用（只是兜底读，不沉淀）。
+ * 优先用 taskId 记录的 tabId；否则按域名在当前所有标签页里查找。
+ */
+export async function grabFromProviderTab(
+  provider: ProviderName,
+  prompt: string,
+  taskId?: string
+): Promise<{ ok: boolean; text: string; method?: string; reason?: string }> {
+  let tabId: number | undefined =
+    taskId !== undefined ? getTask(taskId)?.providers?.[provider]?.tabId : undefined;
+  const pat = DOMAIN_PATTERN[provider];
+  if (tabId === undefined && pat) {
+    const tabs = await chrome.tabs.query({ url: pat });
+    tabId = tabs[0]?.id;
+  }
+  if (tabId === undefined) {
+    return { ok: false, text: '', reason: '找不到该站点的标签页，请先在浏览器里打开它' };
+  }
+  try {
+    const res = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: grabInPage,
+      args: [{ prompt, provider }],
+    });
+    const got = (res?.[0]?.result || { text: '', method: 'none' }) as {
+      text: string;
+      method: string;
+      reason?: string;
+    };
+    const text = (got.text || '').trim();
+    if (text) return { ok: true, text, method: got.method };
+    return { ok: false, text: '', reason: got.reason || '页面当前没有可读取的回答文本' };
+  } catch (e) {
+    return { ok: false, text: '', reason: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export interface GrabOutcome {
   provider: ProviderName;
   ok: boolean;
@@ -142,17 +181,8 @@ export async function manualGrab(
   }
 
   try {
-    const res = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: grabInPage,
-      args: [{ prompt, provider }],
-    });
-    const got = (res?.[0]?.result || { text: '', method: 'none' }) as {
-      text: string;
-      method: string;
-      reason?: string;
-    };
-    const text = (got.text || '').trim();
+    const got = await grabFromProviderTab(provider, prompt, turnId);
+    const text = got.text;
 
     let task = getTask(turnId);
     if (!task) task = createTask(turnId, prompt, [provider]);

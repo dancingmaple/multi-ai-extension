@@ -23,6 +23,8 @@ import type {
   WorkbenchNodeType,
   WorkbenchExecResult,
   WorkbenchExecuteMessage,
+  WorkbenchGrabMessage,
+  WorkbenchGrabResult,
 } from '@shared/types';
 import { PROVIDER_LABELS } from '@shared/constants';
 import { renderTemplate, type NodeOutput } from '../utils/template';
@@ -51,6 +53,8 @@ export interface WorkbenchNodeData {
   error?: string;
   /** 本次执行实际发送给 AI 的提示词（变量/上游占位符已替换），用于导出与排查 */
   renderedPrompt?: string;
+  /** 本次执行在 background 内部创建的 taskId，供「手动获取」定位标签页 */
+  taskId?: string;
 }
 
 export type WBNode = Node<WorkbenchNodeData>;
@@ -349,6 +353,32 @@ function sendWorkbenchExecute(
   });
 }
 
+/** 通过 background 手动兜底获取（WORKBENCH_GRAB）：重新从各家标签页读屏 */
+function sendWorkbenchGrab(
+  prompt: string,
+  providers: ProviderName[],
+  taskId?: string
+): Promise<WorkbenchGrabResult> {
+  return new Promise((resolve, reject) => {
+    const msg: WorkbenchGrabMessage = {
+      type: 'WORKBENCH_GRAB',
+      nodeId: '',
+      prompt,
+      providers,
+      taskId,
+    };
+    try {
+      chrome.runtime.sendMessage(msg, (resp: WorkbenchGrabResult) => {
+        const lastErr = chrome.runtime.lastError?.message;
+        if (lastErr) reject(new Error(lastErr));
+        else resolve(resp);
+      });
+    } catch (e) {
+      reject(e instanceof Error ? e : new Error(String(e)));
+    }
+  });
+}
+
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 function scheduleSave(get: () => WorkflowState): void {
   if (saveTimer) clearTimeout(saveTimer);
@@ -381,6 +411,8 @@ interface WorkflowState {
   runDownstream: (id: string) => Promise<void>;
   runWorkflow: () => Promise<void>;
   confirmNode: (id: string) => void;
+  /** 手动兜底：重新从各家标签页读屏，挽回自动抓取失败的回答 */
+  grabNodeAnswers: (id: string) => Promise<void>;
 
   // ── 持久化 ──
   load: () => Promise<void>;
@@ -448,6 +480,45 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     }
   },
 
+  grabNodeAnswers: async (id) => {
+    const node = get().nodes.find((n) => n.id === id);
+    if (!node) return;
+    const { providers, renderedPrompt, prompt, outputs: prevOutputs, taskId } = node.data;
+    if (providers.length === 0) return;
+    const sendPrompt = renderedPrompt || prompt;
+
+    get().updateNodeData(id, { error: undefined });
+    try {
+      const result = await sendWorkbenchGrab(sendPrompt, providers, taskId);
+      // 合并：保留已有回答，仅用地动抓取成功的内容补全缺失项
+      const merged: Partial<Record<ProviderName, string>> = { ...(prevOutputs as Record<ProviderName, string>) };
+      const errs: Partial<Record<ProviderName, string>> = {};
+      for (const p of providers) {
+        const txt = result.outputs[p];
+        if (txt && txt.length > 0) {
+          merged[p] = txt;
+        } else if (result.errors[p]) {
+          errs[p] = result.errors[p];
+        }
+      }
+      const answered = providers.filter((p) => merged[p] && merged[p]!.length > 0);
+      const output = joinOutputs(merged, providers);
+      const errMsg = Object.keys(errs).length
+        ? Object.values(errs).join('；')
+        : answered.length
+          ? undefined
+          : '仍未获取到任何回答，请确认对应 AI 标签页已打开且回答已生成';
+      get().updateNodeData(id, {
+        outputs: merged,
+        output,
+        status: answered.length ? 'reviewing' : 'error',
+        error: errMsg,
+      });
+    } catch (e) {
+      get().updateNodeData(id, { error: e instanceof Error ? e.message : String(e) });
+    }
+  },
+
   executeNode: async (id) => {
     const node = get().nodes.find((n) => n.id === id);
     if (!node) return;
@@ -487,12 +558,13 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
           output,
           status: 'reviewing',
           error: errMsg,
+          taskId: result.taskId,
         });
       } else {
         const errMsg = result
           ? Object.values(result.errors).filter(Boolean).join('；') || '执行失败'
           : '无响应';
-        get().updateNodeData(id, { status: 'error', error: errMsg });
+        get().updateNodeData(id, { status: 'error', error: errMsg, taskId: result?.taskId });
       }
     } catch (e) {
       get().updateNodeData(id, { status: 'error', error: e instanceof Error ? e.message : String(e) });
