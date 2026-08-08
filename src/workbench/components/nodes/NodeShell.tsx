@@ -1,14 +1,15 @@
 // ============================================================
 // workbench/components/nodes/NodeShell.tsx
 // 四种节点的共享外壳：标题栏 + 状态徽标 + 提示词编辑 +
-// 可选 AI 平台选择 + 输出区 + 运行/采纳/重试操作 + 连线桩。
+// 可选 AI 平台选择 + 输出区（逐家可编辑/复制）+ 运行/采纳/重试操作 + 连线桩。
 // ============================================================
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Handle, Position } from 'reactflow';
 import type { WorkbenchNodeData } from '../../store/workflowStore';
 import { useWorkflowStore } from '../../store/workflowStore';
 import { ALL_PROVIDERS, PROVIDER_LABELS } from '@shared/constants';
 import { isValidVarName } from '../../utils/template';
+import type { ProviderName } from '@shared/types';
 
 const STATUS_LABEL: Record<string, string> = {
   idle: '空闲',
@@ -45,19 +46,45 @@ export function NodeShell({
   const executeNode = useWorkflowStore((s) => s.executeNode);
   const confirmNode = useWorkflowStore((s) => s.confirmNode);
   const grabNodeAnswers = useWorkflowStore((s) => s.grabNodeAnswers);
+  const updateNodeOutput = useWorkflowStore((s) => s.updateNodeOutput);
+  const cancelAutoGrab = useWorkflowStore((s) => s.cancelAutoGrab);
+  const allNodes = useWorkflowStore((s) => s.nodes);
   const running = data.status === 'running';
   const [grabbing, setGrabbing] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [refOpen, setRefOpen] = useState(false);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+
+  // 自动获取倒计时（本地心跳，仅用于显示）
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!data.autoGrabAt) return;
+    const i = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(i);
+  }, [data.autoGrabAt]);
+  const remainSec = data.autoGrabAt
+    ? Math.max(0, Math.ceil((data.autoGrabAt - now) / 1000))
+    : 0;
 
   // 在浏览器新标签打开 AI 会话（用于回看/溯源）
   const openUrl = (url?: string) => {
     if (url) chrome.tabs.create({ url, active: true }).catch(() => window.open(url, '_blank'));
   };
 
+  const copyText = async (text: string, key: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(key);
+      setTimeout(() => setCopied((c) => (c === key ? null : c)), 1200);
+    } catch {
+      /* 剪贴板不可用时静默 */
+    }
+  };
+
   // 真正拿到正文的平台数（空字符串不算已回答，防止「显示 3/3 实际 1 条」）
   const answeredCount = data.providers.filter(
     (p) => data.outputs[p] && data.outputs[p]!.length > 0
   ).length;
-  // 自动抓取后仍可能缺失的回答：已勾选平台中尚未拿到正文的
   const canGrab =
     showProviders &&
     data.providers.length > 0 &&
@@ -74,6 +101,35 @@ export function NodeShell({
       setGrabbing(false);
     }
   };
+
+  // 引用上游输出：在提示词光标处插入 {{变量名}} 或 {{节点id}}
+  const insertRef = (ref: string) => {
+    const token = `{{${ref}}}`;
+    const ta = promptRef.current;
+    const start = ta?.selectionStart ?? data.prompt.length;
+    const end = ta?.selectionEnd ?? data.prompt.length;
+    const next = data.prompt.slice(0, start) + token + data.prompt.slice(end);
+    updateNodeData(id, { prompt: next });
+    setRefOpen(false);
+    requestAnimationFrame(() => {
+      if (ta) {
+        ta.focus();
+        const pos = start + token.length;
+        ta.setSelectionRange(pos, pos);
+      }
+    });
+  };
+
+  // 可引用的上游节点：有变量名或已有输出的其它节点
+  const refCandidates = allNodes
+    .filter((n) => n.id !== id)
+    .filter((n) => (n.data.varName && isValidVarName(n.data.varName)) || (n.data.output && n.data.output.length > 0))
+    .map((n) => ({
+      id: n.id,
+      label: n.data.label,
+      ref: n.data.varName && isValidVarName(n.data.varName) ? n.data.varName : n.id,
+      hasOutput: !!(n.data.output && n.data.output.length > 0),
+    }));
 
   return (
     <div className={`wb-node wb-node--${accent} ${selected ? 'ring-2 ring-sky-400' : ''}`}>
@@ -107,13 +163,49 @@ export function NodeShell({
         </div>
 
         {editablePrompt && (
-          <textarea
-            className="wb-input nodrag nowheel"
-            rows={4}
-            value={data.prompt}
-            onChange={(e) => updateNodeData(id, { prompt: e.target.value })}
-            placeholder="支持 {{node_id.output}} 引用上游输出"
-          />
+          <div className="wb-prompt-wrap">
+            <textarea
+              ref={promptRef}
+              className="wb-input nodrag nowheel"
+              rows={4}
+              value={data.prompt}
+              onChange={(e) => updateNodeData(id, { prompt: e.target.value })}
+              placeholder="支持 {{node_id.output}} 引用上游输出"
+            />
+            {refCandidates.length > 0 && (
+              <div className="wb-ref">
+                <button
+                  type="button"
+                  className="wb-ref__btn nodrag"
+                  title="引用其它节点的输出到当前光标"
+                  onClick={() => setRefOpen((v) => !v)}
+                >
+                  ＋ 引用上游
+                </button>
+                {refOpen && (
+                  <div className="wb-ref__menu">
+                    {refCandidates.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className="wb-ref__item"
+                        title={`插入 {{${c.ref}}}（${c.label}）`}
+                        onClick={() => insertRef(c.ref)}
+                      >
+                        <code>{`{{${c.ref}}}`}</code>
+                        <span className="wb-ref__name">{c.label}</span>
+                        {c.hasOutput ? (
+                          <span className="wb-ref__ok">有输出</span>
+                        ) : (
+                          <span className="wb-ref__none">待运行</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         )}
 
         {showProviders && (
@@ -137,6 +229,40 @@ export function NodeShell({
           </div>
         )}
 
+        {showProviders && (
+          <div className="wb-delay nodrag">
+            <label className="wb-delay__label" title="执行后等待该秒数自动触发一次「手动获取」，挽回抓取失败">
+              自动获取(秒)
+            </label>
+            <input
+              type="number"
+              min={0}
+              step={5}
+              className="wb-delay__input"
+              value={data.grabDelay ?? ''}
+              placeholder="0=不自动"
+              onChange={(e) =>
+                updateNodeData(id, {
+                  grabDelay: e.target.value === '' ? undefined : Math.max(0, Number(e.target.value) || 0),
+                })
+              }
+            />
+            {data.autoGrabAt && (
+              <span className="wb-delay__count">
+                ⏱ {remainSec}s 后自动获取
+                <button
+                  type="button"
+                  className="wb-delay__cancel"
+                  onClick={() => cancelAutoGrab(id)}
+                  title="取消自动获取"
+                >
+                  取消
+                </button>
+              </span>
+            )}
+          </div>
+        )}
+
         {(data.output || data.error) && (
           <div className="wb-output nowheel">
             {showProviders && data.providers.length > 0 && (
@@ -152,7 +278,47 @@ export function NodeShell({
             ) : data.error ? (
               <div className="wb-output__warn" title={data.error}>⚠ 部分失败：{data.error.length > 60 ? data.error.slice(0, 57) + '…' : data.error}</div>
             ) : null}
-            {data.output && <div className="wb-output__text">{data.output}</div>}
+
+            {/* 逐家回答：可编辑 + 可复制 */}
+            {showProviders &&
+              data.providers.map((p) => {
+                const txt = data.outputs[p];
+                if (!txt || txt.length === 0) return null;
+                const ck = `out_${p}`;
+                return (
+                  <div className="wb-answer" key={p}>
+                    <div className="wb-answer__head">
+                      <span className="wb-answer__name">{PROVIDER_LABELS[p]}</span>
+                      <button
+                        type="button"
+                        className="wb-copy"
+                        onClick={() => void copyText(txt, ck)}
+                      >
+                        {copied === ck ? '已复制' : '复制'}
+                      </button>
+                    </div>
+                    <textarea
+                      className="wb-answer__edit nodrag nowheel"
+                      rows={5}
+                      value={txt}
+                      onChange={(e) => updateNodeOutput(id, p as ProviderName, e.target.value)}
+                    />
+                  </div>
+                );
+              })}
+
+            {data.output && data.providers.some((p) => data.outputs[p] && data.outputs[p]!.length > 0) && (
+              <div className="wb-output__all">
+                <button
+                  type="button"
+                  className="wb-copy wb-copy--all"
+                  onClick={() => void copyText(data.output, 'all')}
+                >
+                  {copied === 'all' ? '已复制' : '复制全部'}
+                </button>
+              </div>
+            )}
+
             {showProviders && data.urls && (() => {
               const linkProviders = data.providers.filter((p) => data.urls?.[p]);
               if (linkProviders.length === 0) return null;

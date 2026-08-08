@@ -10,11 +10,43 @@ import { sleep } from '../shared/utils';
 //  - 又避免每次执行都新开标签、导致浏览器里堆满重复 tab，
 //  - 同时让「手动获取 / 预览 / 聚焦」能精确定位到这一张 tab，不再因
 //    「同 provider 多 tab」而抓错页面（之前的 forceNew 方案的痛点）。
+//
+// 关键：登记表持久化到 chrome.storage，跨 MV3 service worker 重启不丢失。
+// 否则 SW 重启后登记表清空，「手动获取 / 聚焦」回退到「按域名查第一个匹配
+// tab」，极易抓到上一个节点的页面（内容串台 / 聚焦错 tab）。
 // ─────────────────────────────────────────────────────────────
+const WB_TAB_REGISTRY_KEY = 'wb_tab_registry_v1';
 const nodeProviderTabs = new Map<string, number>();
 
 function registryKey(nodeId: string, provider: ProviderName): string {
   return `${nodeId}:${provider}`;
+}
+
+/** 把内存登记表落盘（耐久化），供 SW 重启后恢复 */
+function persistRegistry(): void {
+  try {
+    const obj: Record<string, number> = {};
+    for (const [k, v] of nodeProviderTabs.entries()) obj[k] = v;
+    void chrome.storage.local.set({ [WB_TAB_REGISTRY_KEY]: obj });
+  } catch {
+    /* 存储不可用时静默，内存表仍可用 */
+  }
+}
+
+/** SW 启动时从 chrome.storage 恢复登记表，避免重启后丢失导致抓错 tab */
+export async function loadTabRegistry(): Promise<void> {
+  try {
+    const res = await chrome.storage.local.get(WB_TAB_REGISTRY_KEY);
+    const obj = res[WB_TAB_REGISTRY_KEY] as Record<string, number> | undefined;
+    if (obj && typeof obj === 'object') {
+      for (const [k, v] of Object.entries(obj)) {
+        if (typeof v === 'number') nodeProviderTabs.set(k, v);
+      }
+      console.log('[MultiAI:tabManager] 已从存储恢复标签页登记表', nodeProviderTabs.size, '条');
+    }
+  } catch (e) {
+    console.warn('[MultiAI:tabManager] 恢复登记表失败', e);
+  }
 }
 
 /** 取出某节点某平台的专属 tabId（不做存活校验，调用方负责） */
@@ -28,9 +60,14 @@ export function getRegisteredTabId(
 
 /** 标签页被用户关闭时，从登记表移除，避免复用死 tab */
 chrome.tabs.onRemoved.addListener((tabId) => {
+  let changed = false;
   for (const [key, id] of nodeProviderTabs.entries()) {
-    if (id === tabId) nodeProviderTabs.delete(key);
+    if (id === tabId) {
+      nodeProviderTabs.delete(key);
+      changed = true;
+    }
   }
+  if (changed) persistRegistry();
 });
 
 export async function getOrCreateProviderTab(
@@ -57,12 +94,15 @@ export async function getOrCreateProviderTab(
           return existing;
         }
       } catch {
+        // 标签页已失效（被关/崩溃）：从登记表移除并重建
         nodeProviderTabs.delete(key);
+        persistRegistry();
       }
     }
     // 还没有专属 tab：新开并登记
     const tabId = await createProviderTab(provider);
     nodeProviderTabs.set(key, tabId);
+    persistRegistry();
     console.log('[MultiAI:tabManager] 新建并登记节点专属 tab', tabId, 'for', key);
     return tabId;
   }

@@ -224,6 +224,8 @@ export type WorkbenchGrabMessage = {
   taskId?: string;
   /** 可选：本次节点各家 AI 的标签页 id（按 节点+平台 登记的唯一专属 tab，避免多标签串台） */
   tabIds?: Partial<Record<ProviderName, number>>;
+  /** 可选：本次节点各家 AI 已记录的会话 url，域名兜底查找时优先精确匹配，避免串台 */
+  urls?: Partial<Record<ProviderName, string>>;
 };
 
 export type WorkbenchGrabResult = {

@@ -495,3 +495,180 @@ textarea.wb-input {
   color: #fbbf24;
   line-height: 1.5;
 }
+
+/* ── 节点内：提示词 + 引用上游 ─────────────────── */
+.wb-prompt-wrap {
+  position: relative;
+}
+.wb-ref {
+  position: relative;
+  margin-top: 4px;
+}
+.wb-ref__btn {
+  background: #334155;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #cbd5e1;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.wb-ref__btn:hover {
+  background: #475569;
+}
+.wb-ref__menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 220px;
+  max-height: 220px;
+  overflow: auto;
+  background: #0f172a;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 10px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+}
+.wb-ref__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: #e2e8f0;
+  border-radius: 6px;
+  padding: 5px 7px;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+}
+.wb-ref__item:hover {
+  background: #1e293b;
+}
+.wb-ref__item code {
+  background: rgba(125, 211, 252, 0.12);
+  color: #7dd3fc;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+}
+.wb-ref__name {
+  flex: 1;
+  color: #cbd5e1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wb-ref__ok {
+  color: #4ade80;
+  font-size: 10px;
+}
+.wb-ref__none {
+  color: #64748b;
+  font-size: 10px;
+}
+
+/* ── 节点内：自动获取倒计时 ───────────────────── */
+.wb-delay {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.wb-delay__label {
+  font-size: 11px;
+  color: #94a3b8;
+}
+.wb-delay__input {
+  width: 64px;
+  height: 26px;
+  background: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 11px;
+}
+.wb-delay__count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #fbbf24;
+}
+.wb-delay__cancel {
+  background: transparent;
+  border: 1px solid rgba(248, 113, 113, 0.5);
+  color: #fca5a5;
+  border-radius: 5px;
+  padding: 0 6px;
+  font-size: 10px;
+  cursor: pointer;
+}
+.wb-delay__cancel:hover {
+  background: rgba(248, 113, 113, 0.15);
+}
+
+/* ── 节点内：逐家回答（可编辑 / 可复制） ──────── */
+.wb-answer {
+  margin-top: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0b1220;
+}
+.wb-answer__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 8px;
+  background: rgba(30, 41, 59, 0.7);
+}
+.wb-answer__name {
+  font-size: 11px;
+  font-weight: 600;
+  color: #93c5fd;
+}
+.wb-answer__edit {
+  width: 100%;
+  resize: vertical;
+  border: none;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  background: #0b1220;
+  color: #e2e8f0;
+  font-size: 11px;
+  line-height: 1.5;
+  font-family: inherit;
+  padding: 6px 8px;
+}
+.wb-answer__edit:focus {
+  outline: none;
+  background: #0f172a;
+}
+.wb-copy {
+  background: rgba(99, 102, 241, 0.18);
+  border: 1px solid rgba(129, 140, 248, 0.5);
+  color: #c7d2fe;
+  border-radius: 6px;
+  padding: 1px 8px;
+  font-size: 10px;
+  cursor: pointer;
+}
+.wb-copy:hover {
+  background: rgba(99, 102, 241, 0.32);
+}
+.wb-output__all {
+  margin-top: 6px;
+  display: flex;
+  justify-content: flex-end;
+}
+.wb-copy--all {
+  font-size: 11px;
+  padding: 2px 10px;
+}

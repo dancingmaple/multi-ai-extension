@@ -33,6 +33,7 @@ import {
   loadConversations,
 } from './conversationStore';
 import { manualGrab, manualGrabAll, saveGrabbedText, grabFromProviderTab } from './manualGrab';
+import { loadTabRegistry } from './tabManager';
 import { trustedClickAt } from './trustedClick';
 import { buildMarkdown, fileNameFor } from '../shared/exportMarkdown';
 import { runWorkbenchExecution } from './workbenchEngine';
@@ -189,6 +190,7 @@ chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
 async function doInit(): Promise<void> {
   console.log('[MultiAI:background] Initializing...');
   await loadLastTask();
+  await loadTabRegistry();
   await loadConversations().catch(() => {});
   // 工具栏点击默认打开侧边栏（§4 双形态入口）
   await chrome.sidePanel
@@ -369,14 +371,20 @@ export async function handleUIMessage(
       const taskId = msg.taskId as string | undefined;
       const nodeId = msg.nodeId as string | undefined;
       const tabIds = (msg.tabIds ?? {}) as Partial<Record<ProviderName, number>>;
+      const msgUrls = (msg.urls ?? {}) as Partial<Record<ProviderName, string>>;
       const outputs: Partial<Record<ProviderName, string>> = {};
       const errors: Partial<Record<ProviderName, string>> = {};
       const urls: Partial<Record<ProviderName, string>> = {};
       const resolvedTabIds: Partial<Record<ProviderName, number>> = {};
       for (const p of providers) {
-        // 解析优先级：显式 tabId > 本节点登记的专属 tab > taskId > 域名查找，
-        // 确保多标签场景下一定抓到「这个节点」对应的那张页面。
-        const g = await grabFromProviderTab(p, prompt, { nodeId, taskId, tabId: tabIds[p] });
+        // 解析优先级：显式 tabId > 本节点登记的专属 tab > taskId > 域名查找（优先匹配本节点 url），
+        // 确保多标签 / SW 重启后都抓到「这个节点」对应的那张页面，不串台。
+        const g = await grabFromProviderTab(p, prompt, {
+          nodeId,
+          taskId,
+          tabId: tabIds[p],
+          url: msgUrls?.[p],
+        });
         if (g.ok && g.text) outputs[p] = g.text;
         else errors[p] = g.reason || '未读取到回答文本';
         if (g.url) urls[p] = g.url;

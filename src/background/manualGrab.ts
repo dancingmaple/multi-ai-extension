@@ -125,10 +125,15 @@ export { grabInPage };
 export async function grabFromProviderTab(
   provider: ProviderName,
   prompt: string,
-  opts?: { taskId?: string; tabId?: number; nodeId?: string }
+  opts?: { taskId?: string; tabId?: number; nodeId?: string; url?: string }
 ): Promise<{ ok: boolean; text: string; method?: string; reason?: string; url?: string; tabId?: number }> {
   let tabId: number | undefined = opts?.tabId;
 
+  // 定位优先级（确保多标签 / SW 重启后都抓到「这个节点」对应的那张页面）：
+  //   1) 显式传入的 tabId（节点精确记录的专属 tab，最权威）
+  //   2) nodeId 在「持久化登记表」里对应的专属 tab（根治 SW 重启后串台）
+  //   3) taskId 记录的 tabId
+  //   4) 按域名查找：优先匹配本节点已记录的会话 url，避免拿到上一个节点的页面
   if (tabId === undefined && opts?.nodeId !== undefined) {
     tabId = getRegisteredTabId(opts.nodeId, provider);
   }
@@ -138,7 +143,12 @@ export async function grabFromProviderTab(
   const pat = DOMAIN_PATTERN[provider];
   if (tabId === undefined && pat) {
     const tabs = await chrome.tabs.query({ url: pat });
-    tabId = tabs[0]?.id;
+    if (tabs.length > 0) {
+      // 有多个同域名 tab（不同节点的专属 tab 并存）时，优先精确匹配本节点记录的 url；
+      // 拿不到匹配项再退而求其次取第一个——但前三级已能在绝大多数情况下命中正确 tab。
+      const byUrl = opts?.url ? tabs.find((t) => t.url === opts.url) : undefined;
+      tabId = byUrl?.id ?? tabs[0]?.id;
+    }
   }
   if (tabId === undefined) {
     return { ok: false, text: '', reason: '找不到该站点的标签页，请先在浏览器里打开它' };

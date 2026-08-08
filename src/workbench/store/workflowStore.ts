@@ -59,6 +59,10 @@ export interface WorkbenchNodeData {
   urls?: Partial<Record<ProviderName, string>>;
   /** 每家 AI 实际运行的标签页 id（forceNew 后为新开标签），键为 provider */
   tabIds?: Partial<Record<ProviderName, number>>;
+  /** 自动获取倒计时（秒）：执行后等待该时长自动触发一次「手动获取」，挽回抓取失败 */
+  grabDelay?: number;
+  /** 待触发的自动获取预定时间（时间戳 ms）；用于 UI 显示倒计时与取消；到点后清空 */
+  autoGrabAt?: number;
 }
 
 export type WBNode = Node<WorkbenchNodeData>;
@@ -366,7 +370,8 @@ function sendWorkbenchGrab(
   providers: ProviderName[],
   nodeId: string,
   taskId?: string,
-  tabIds?: Partial<Record<ProviderName, number>>
+  tabIds?: Partial<Record<ProviderName, number>>,
+  urls?: Partial<Record<ProviderName, string>>
 ): Promise<WorkbenchGrabResult> {
   return new Promise((resolve, reject) => {
     const msg: WorkbenchGrabMessage = {
@@ -376,6 +381,7 @@ function sendWorkbenchGrab(
       providers,
       taskId,
       tabIds,
+      urls,
     };
     try {
       chrome.runtime.sendMessage(msg, (resp: WorkbenchGrabResult) => {
@@ -395,6 +401,34 @@ function scheduleSave(get: () => WorkflowState): void {
   saveTimer = setTimeout(() => {
     void get().save();
   }, 400);
+}
+
+/** 自动获取定时器登记表：nodeId -> timeout 句柄（执行后延时触发「手动获取」） */
+const autoGrabTimers = new Map<string, ReturnType<typeof setTimeout>>();
+function clearAutoGrabTimer(id: string): void {
+  const t = autoGrabTimers.get(id);
+  if (t !== undefined) {
+    clearTimeout(t);
+    autoGrabTimers.delete(id);
+  }
+}
+
+/**
+ * 调度一次「到点自动获取」：在 delaySec 秒后自动触发该节点的手动获取，
+ * 用于挽回自动抓取失败的回答（例如某家 AI 超时 / 未登录）。
+ * 到点后清空 autoGrabAt 标记，并调用 grabNodeAnswers。
+ */
+function scheduleAutoGrab(get: () => WorkflowState, id: string, delaySec: number): void {
+  if (!(delaySec > 0)) return;
+  clearAutoGrabTimer(id);
+  const at = Date.now() + delaySec * 1000;
+  get().updateNodeData(id, { autoGrabAt: at });
+  const t = setTimeout(() => {
+    autoGrabTimers.delete(id);
+    get().updateNodeData(id, { autoGrabAt: undefined });
+    void get().grabNodeAnswers(id);
+  }, delaySec * 1000);
+  autoGrabTimers.set(id, t);
 }
 
 interface WorkflowState {
@@ -418,6 +452,10 @@ interface WorkflowState {
   onConnect: (conn: Connection) => void;
   addNode: (nodeType: WorkbenchNodeType) => void;
   updateNodeData: (id: string, patch: Partial<WorkbenchNodeData>) => void;
+  /** 直接编辑某家 AI 的回答文本（节点结果可编辑），并重新聚合 output */
+  updateNodeOutput: (id: string, provider: ProviderName, text: string) => void;
+  /** 取消该节点待触发的自动获取定时器 */
+  cancelAutoGrab: (id: string) => void;
 
   // ── 引擎 ──
   executeNode: (id: string) => Promise<void>;
@@ -487,6 +525,22 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     scheduleSave(get);
   },
 
+  updateNodeOutput: (id, provider, text) => {
+    const node = get().nodes.find((n) => n.id === id);
+    if (!node) return;
+    const outputs: Record<ProviderName, string> = {
+      ...(node.data.outputs as Record<ProviderName, string>),
+    };
+    outputs[provider] = text;
+    const output = joinOutputs(outputs, node.data.providers);
+    get().updateNodeData(id, { outputs, output });
+  },
+
+  cancelAutoGrab: (id) => {
+    clearAutoGrabTimer(id);
+    get().updateNodeData(id, { autoGrabAt: undefined });
+  },
+
   confirmNode: (id) => {
     const node = get().nodes.find((n) => n.id === id);
     if (node && node.data.status === 'reviewing') {
@@ -504,7 +558,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
     get().updateNodeData(id, { error: undefined });
     try {
-      const result = await sendWorkbenchGrab(sendPrompt, providers, id, taskId, prevTabIds);
+      const result = await sendWorkbenchGrab(sendPrompt, providers, id, taskId, prevTabIds, prevUrls);
       // 合并：保留已有回答，仅用地动抓取成功的内容补全缺失项
       const merged: Partial<Record<ProviderName, string>> = { ...(prevOutputs as Record<ProviderName, string>) };
       const errs: Partial<Record<ProviderName, string>> = {};
@@ -534,6 +588,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         error: errMsg,
         urls,
         tabIds,
+        autoGrabAt: undefined,
       });
     } catch (e) {
       get().updateNodeData(id, { error: e instanceof Error ? e.message : String(e) });
@@ -543,7 +598,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   executeNode: async (id) => {
     const node = get().nodes.find((n) => n.id === id);
     if (!node) return;
-    const { nodeType, prompt, providers } = node.data;
+    const { nodeType, prompt, providers, grabDelay } = node.data;
+
+    // 重新执行前，清掉上一轮可能还在排队的自动获取定时器
+    clearAutoGrabTimer(id);
+    get().updateNodeData(id, { autoGrabAt: undefined });
 
     // 起点：纯种子输入，不调用 AI
     if (nodeType === 'start') {
@@ -583,6 +642,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
           urls: result.urls,
           tabIds: result.tabIds,
         });
+        scheduleAutoGrab(get, id, grabDelay ?? 0);
       } else {
         const errMsg = result
           ? Object.values(result.errors).filter(Boolean).join('；') || '执行失败'
@@ -594,6 +654,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
           urls: result?.urls,
           tabIds: result?.tabIds,
         });
+        scheduleAutoGrab(get, id, grabDelay ?? 0);
       }
     } catch (e) {
       get().updateNodeData(id, { status: 'error', error: e instanceof Error ? e.message : String(e) });
@@ -633,7 +694,12 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       const res = await chrome.storage.local.get(STORAGE_KEY);
       const saved = res[STORAGE_KEY] as { nodes: WBNode[]; edges: Edge[] } | undefined;
       if (saved && Array.isArray(saved.nodes) && saved.nodes.length > 0) {
-        set({ nodes: saved.nodes, edges: saved.edges ?? [] });
+        // 清除过期的自动获取倒计时标记（定时器不会跨页面加载存活）
+        const cleaned = saved.nodes.map((n) => ({
+          ...n,
+          data: { ...n.data, autoGrabAt: undefined },
+        }));
+        set({ nodes: cleaned, edges: saved.edges ?? [] });
         return;
       }
     } catch {
