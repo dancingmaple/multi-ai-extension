@@ -9,6 +9,7 @@ import { DoubaoAdapter } from './adapters/doubao';
 import { KimiAdapter } from './adapters/kimi';
 import { LoginRequiredError } from '../shared/utils';
 import { SETTINGS_KEY, DEFAULT_SETTINGS } from '../shared/constants';
+import { getCustomForProvider } from '../shared/customSelectors';
 
 const adapters: Record<ProviderName, SiteAdapter> = {
   chatgpt: new ChatGPTAdapter(),
@@ -52,6 +53,17 @@ export async function executePrompt(
 
   const settings = await loadSettings();
   adapter.setTimeouts(settings);
+
+  // 应用手动修复的自定义选择器（来自测试台点选保存）
+  try {
+    const custom = await getCustomForProvider(msg.provider);
+    if (custom) {
+      adapter.setCustomSelectors(custom);
+      console.log('[MultiAI:executor] 使用自定义选择器', msg.provider, custom);
+    }
+  } catch {
+    /* ignore */
+  }
 
   console.log('[MultiAI:executor] Starting execution for', msg.provider, 'prompt:', msg.prompt.substring(0, 80));
 

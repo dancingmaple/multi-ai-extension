@@ -78,4 +78,11 @@ export const EMBED_MSG = {
   // 嵌入视图的手动抓取：父页面请求 → iframe 内就地读屏 → 回传结果
   GRAB: 'multi_ai_grab',
   GRAB_RESULT: 'multi_ai_grab_result',
+  // 手动选取元素：父页面请求 → iframe 内悬停高亮 → 点击捕获选择器 → 回传
+  PICK_START: 'multi_ai_pick_start',
+  PICK_STOP: 'multi_ai_pick_stop',
+  PICK_RESULT: 'multi_ai_pick_result',
 } as const;
+
+// 自定义元素选择器（手动修复 UI 变化）永久存储键
+export const CUSTOM_SELECTORS_KEY = 'multiAI.customSelectors';

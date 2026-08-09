@@ -281,6 +281,17 @@ export type PingMessage = {
 
 export type BackgroundToContentMessage = ExecutePromptMessage | PingMessage;
 
+// ── 手动选取元素（适配 UI 变化） ─────────────────────
+export type ElementRole = 'input' | 'submit' | 'response';
+
+export type ProviderCustomSelectors = {
+  input?: string;
+  submit?: string;
+  response?: string;
+};
+
+export type CustomSelectorMap = Partial<Record<ProviderName, ProviderCustomSelectors>>;
+
 // ── Content → Background ───────────────────────────────
 
 export type ProviderStatusMessage = {

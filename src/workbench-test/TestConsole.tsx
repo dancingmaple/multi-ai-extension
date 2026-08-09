@@ -8,9 +8,10 @@
 //  - 使用固定 nodeId（test_node_xxx）独立标签页，不污染工作台节点
 // ============================================================
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ProviderName, WorkbenchExecResult, WorkbenchGrabResult } from '../shared/types';
-import { ALL_PROVIDERS, PROVIDER_LABELS } from '../shared/constants';
+import type { ProviderName, WorkbenchExecResult, WorkbenchGrabResult, ElementRole, ProviderCustomSelectors } from '../shared/types';
+import { ALL_PROVIDERS, PROVIDER_LABELS, EMBED_MSG } from '../shared/constants';
 import { getProviderUrl } from '../shared/providers';
+import { loadCustomSelectors, upsertCustomSelector, clearCustomSelector } from '../shared/customSelectors';
 
 type LogLevel = 'info' | 'ok' | 'warn' | 'err';
 interface LogLine {
@@ -31,6 +32,24 @@ export function TestConsole() {
   const [grabResult, setGrabResult] = useState<WorkbenchGrabResult | null>(null);
   const [t0, setT0] = useState(0);
   const logBoxRef = useRef<HTMLDivElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  // 手动选取元素状态
+  const [pickRole, setPickRole] = useState<ElementRole | null>(null);
+  const [savedSel, setSavedSel] = useState<ProviderCustomSelectors | null>(null);
+
+  // 加载当前 provider 已保存的自定义选择器
+  useEffect(() => {
+    let alive = true;
+    loadCustomSelectors()
+      .then((map) => {
+        if (alive) setSavedSel(map[provider] ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [provider]);
 
   const push = (level: LogLevel, text: string) => {
     setLogs((prev) => [...prev, { ts: Date.now(), level, text }]);
@@ -74,6 +93,56 @@ export function TestConsole() {
     chrome.runtime.onMessage.addListener(listener);
     return () => chrome.runtime.onMessage.removeListener(listener);
   }, [t0]);
+
+  const roleLabel = (r: ElementRole): string => (r === 'input' ? '输入框' : r === 'submit' ? '发送按钮' : '回答区域');
+
+  // 监听 iframe 内 content script 回传的点选结果（postMessage，非 chrome.runtime）
+  useEffect(() => {
+    const onMsg = (ev: MessageEvent) => {
+      const data = ev.data as Record<string, unknown> | null;
+      if (!data || data.__multiAi !== EMBED_MSG.PICK_RESULT) return;
+      const role = data.role as ElementRole;
+      const selector = (data.selector as string) || '';
+      setPickRole(null);
+      if (!selector) {
+        push('warn', `点选「${roleLabel(role)}」已取消`);
+        return;
+      }
+      void (async () => {
+        const map = await upsertCustomSelector(provider, role, selector);
+        setSavedSel(map[provider] ?? null);
+        push('ok', `✅ 已保存「${roleLabel(role)}」选择器：${selector}`);
+      })();
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, [provider]);
+
+  // 开始手动点选：给 iframe 内的 content script 发 PICK_START
+  const startPickEl = (role: ElementRole) => {
+    setPickRole(role);
+    const w = iframeRef.current?.contentWindow;
+    if (w) {
+      w.postMessage({ __multiAi: EMBED_MSG.PICK_START, provider, role }, '*');
+      push('info', `👆 请在右侧预览页点选「${roleLabel(role)}」（元素会高亮，Esc 取消）`);
+    } else {
+      push('err', '预览 iframe 未就绪，无法点选');
+    }
+  };
+
+  const stopPickEl = () => {
+    const w = iframeRef.current?.contentWindow;
+    if (w) w.postMessage({ __multiAi: EMBED_MSG.PICK_STOP, provider }, '*');
+    setPickRole(null);
+  };
+
+  const clearOne = (role: ElementRole) => {
+    void (async () => {
+      const map = await clearCustomSelector(provider, role);
+      setSavedSel(map[provider] ?? null);
+      push('info', `已清除「${roleLabel(role)}」自定义选择器`);
+    })();
+  };
 
   // 发起请求：完整走 WORKBENCH_EXECUTE 链路
   const runExecute = async () => {
@@ -194,6 +263,41 @@ export function TestConsole() {
               清空日志
             </button>
           </div>
+
+          {/* ── 手动修复：点选元素（适配网页 UI 变化） ── */}
+          <div className="tc-pick">
+            <div className="tc-pick__title">
+              手动修复元素定位
+              <span className="tc-pick__hint">网页改版后可在右侧预览页点选，永久保存</span>
+            </div>
+            <div className="tc-pick__btns">
+              {(['input', 'submit', 'response'] as ElementRole[]).map((role) => (
+                <button
+                  key={role}
+                  className={'tc-pick__btn' + (pickRole === role ? ' is-active' : '')}
+                  onClick={() => (pickRole === role ? stopPickEl() : startPickEl(role))}
+                >
+                  {pickRole === role ? '点选中…' : '选取' + roleLabel(role)}
+                </button>
+              ))}
+            </div>
+            <div className="tc-pick__list">
+              {(['input', 'submit', 'response'] as ElementRole[]).map((role) => {
+                const sel = savedSel?.[role];
+                return (
+                  <div key={role} className="tc-pick__item">
+                    <span className="tc-pick__role">{roleLabel(role)}</span>
+                    <code className="tc-pick__sel">{sel || '（默认）'}</code>
+                    {sel && (
+                      <button className="tc-pick__del" title="清除自定义" onClick={() => clearOne(role)}>
+                        ×
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
         {/* 实时日志 */}
@@ -237,6 +341,7 @@ export function TestConsole() {
         </div>
         <iframe
           key={provider}
+          ref={iframeRef}
           className="tc-preview__frame"
           src={iframeUrl}
           title={`${PROVIDER_LABELS[provider]} 预览`}

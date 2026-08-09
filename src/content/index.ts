@@ -1,9 +1,10 @@
 import { onBackgroundMessage } from '../shared/messaging';
-import type { ExecutePromptMessage, ProviderName } from '../shared/types';
+import type { ExecutePromptMessage, ProviderName, ElementRole } from '../shared/types';
 import { executePrompt } from './executor';
 import { getProviderFromUrl } from '../shared/providers';
 import { EMBED_MSG } from '../shared/constants';
 import { grabLocal } from './grabLocal';
+import { startPick } from './pickElement';
 
 const currentProvider: ProviderName | null = getProviderFromUrl(location.href);
 
@@ -152,6 +153,28 @@ if (currentProvider) {
         reason: out.reason,
         url: location.href,
       });
+      return;
+    }
+
+    // 手动选取元素：父页面请求在 iframe 内点选输入框 / 发送按钮 / 回答区域
+    if (data.__multiAi === EMBED_MSG.PICK_START) {
+      const p = data.provider as ProviderName | undefined;
+      const role = data.role as ElementRole | undefined;
+      if (p !== provider || !role) return;
+      console.log('[MultiAI:content] PICK_START role=', role);
+      const src = ev.source as Window | null;
+      startPick(
+        role,
+        (r, selector) => {
+          console.log('[MultiAI:content] PICK_RESULT', r, selector);
+          replyTo(src, { __multiAi: EMBED_MSG.PICK_RESULT, role: r, selector });
+        },
+        () => {
+          // 取消（Esc）：回传空选择器，父页面知道取消
+          replyTo(src, { __multiAi: EMBED_MSG.PICK_RESULT, role, selector: '' });
+        }
+      );
+      return;
     }
   });
 
