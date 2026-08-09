@@ -21,7 +21,7 @@ export class GeminiAdapter extends BaseAdapter {
   readonly provider: ProviderName = 'gemini';
 
   /**
-   * New Gemini (2025-2026) DOM changes frequently.
+   * New Gemini (2025-2026) uses Quill-rich-editor.
    * Selectors ordered by priority: exact new patterns -> generic -> fallback.
    */
   readonly inputSelectors = [
@@ -59,7 +59,7 @@ export class GeminiAdapter extends BaseAdapter {
   ];
 
   readonly submitSelectors = [
-    // -- New Gemini submit --
+    // -- New Gemini submit button (arrow icon) --
     'button[aria-label="Submit"]',
     'button[aria-label="\u63d0\u4ea4"]',
     'button[aria-label*="submit" i]',
@@ -71,6 +71,10 @@ export class GeminiAdapter extends BaseAdapter {
     'button[aria-label*="Send" i]',
     'button[aria-label*="\u53d1\u9001" i]',
     'button[aria-label*="send" i]',
+
+    // -- Icon-only buttons near input (common in new Gemini) --
+    'button[aria-label*="arrow" i]',
+    'button[aria-label*="\u2192" i]',
   ];
 
   readonly responseSelectors = [
@@ -140,6 +144,7 @@ export class GeminiAdapter extends BaseAdapter {
     return null;
   }
 
+  /** Simulate pressing Enter on element */
   private fireEnter(el: HTMLElement): void {
     const init = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true, composed: true, isComposing: false } as KeyboardEventInit;
     el.dispatchEvent(new KeyboardEvent('keydown', init));
@@ -155,12 +160,10 @@ export class GeminiAdapter extends BaseAdapter {
     const start = Date.now();
     const pollInterval = 400;
 
-    // Use own findInput with visibility check instead of base class waitForElement
     while (Date.now() - start < timeout) {
       const el = this.findInput();
       if (el) {
         console.log('[Gemini:adapter] Page ready in ' + (Date.now() - start) + 'ms');
-        // Extra wait for page stability
         await sleep(1500);
         return;
       }
@@ -181,6 +184,57 @@ export class GeminiAdapter extends BaseAdapter {
     return got.replace(/\s/g, '').includes(head) || got.length >= Math.max(4, Math.floor(prompt.length * 0.8));
   }
 
+  /**
+   * Write text into a Quill/ProseMirror-rich-contenteditable.
+   * Key insight: modern frameworks (React/Angular) listen for specific event patterns.
+   * We try multiple strategies in order of reliability.
+   */
+  private writeRichText(el: HTMLElement, text: string): void {
+    // Strategy 1: execCommand('insertText') — works for most contenteditable including Quill
+    el.focus();
+    try {
+      // Select all existing content first
+      document.execCommand('selectAll', false, undefined);
+      document.execCommand('delete', false, undefined);
+    } catch { /* some contexts block execCommand */ }
+
+    // Try insertText via execCommand (most reliable for Quill)
+    let inserted = false;
+    try {
+      document.execCommand('insertText', false, text);
+      inserted = true;
+      console.log('[Gemini:adapter] writeRichText: execCommand insertText succeeded');
+    } catch {
+      console.warn('[Gemini:adapter] writeRichText: execCommand insertText failed, trying fallback');
+    }
+
+    if (!inserted) {
+      // Strategy 2: Direct textContent + InputEvent
+      el.textContent = text;
+    }
+
+    // Dispatch comprehensive events to notify frameworks
+    const inputEvent = new InputEvent('input', {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      data: text,
+      inputType: 'insertText',
+    });
+    el.dispatchEvent(inputEvent);
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+
+    // Strategy 3: Also try setting innerHTML for Quill (Quill stores content in innerHTML)
+    const qlEditor = el.closest('.ql-editor') || el.classList.contains('ql-editor') ? el : null;
+    if (qlEditor && !inserted) {
+      try {
+        qlEditor.innerHTML = '<p>' + text.replace(/\n/g, '</p><p>') + '</p>';
+        el.dispatchEvent(inputEvent);
+        console.log('[Gemini:adapter] writeRichText: Quill innerHTML fallback applied');
+      } catch { /* noop */ }
+    }
+  }
+
   override async setPrompt(prompt: string): Promise<void> {
     this.lastPrompt = prompt;
     this.preSendLen = pageText().length;
@@ -188,117 +242,140 @@ export class GeminiAdapter extends BaseAdapter {
     const el = this.findInput();
     if (!el) throw new SubmitFailedError(this.provider, 'No visible input found');
 
-    el.focus();
-    await sleep(80);
+    console.log('[Gemini:adapter] setPrompt: writing "' + prompt.slice(0, 40) + '" to', el.tagName, el.className.slice(0, 40));
 
-    // Clear old content (common residue on retry)
-    if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
-      const proto = Object.getPrototypeOf(el);
-      const desc = Object.getOwnPropertyDescriptor(proto, 'value');
-      desc?.set?.call(el, '');
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-    } else {
-      el.textContent = '';
-      try { document.execCommand('selectAll', false); document.execCommand('delete', false); } catch { /* noop */ }
-      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
-    }
-    await sleep(80);
-
-    // Write new content
-    if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+    // Use rich-text writer for contenteditable elements
+    if (el.getAttribute('contenteditable') === 'true' || el.isContentEditable) {
+      this.writeRichText(el, prompt);
+    } else if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+      // Standard form input
       const proto = Object.getPrototypeOf(el);
       const desc = Object.getOwnPropertyDescriptor(proto, 'value');
       desc?.set?.call(el, prompt);
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     } else {
-      try {
-        document.execCommand('insertText', false, prompt);
-      } catch {
-        el.textContent = prompt;
-      }
-      el.dispatchEvent(new InputEvent('input', { bubbles: true, data: prompt, inputType: 'insertText' }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
+      // Unknown element type — try rich text approach
+      this.writeRichText(el, prompt);
     }
 
-    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', code: 'KeyA', bubbles: true }));
-    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: prompt, inputType: 'insertText' }));
-    el.dispatchEvent(new KeyboardEvent('keyup', { key: 'a', code: 'KeyA', bubbles: true }));
-    el.blur();
-    el.focus();
     await sleep(300);
 
-    if (!this.writeOk(el, prompt)) {
-      console.warn('[Gemini:adapter] setPrompt readback not confirmed, continuing with submit');
+    // Verify and report
+    const got = this.readBack(el);
+    if (this.writeOk(el, prompt)) {
+      console.log('[Gemini:adapter] setPrompt: OK (readback=' + got.slice(0, 30) + ')');
+    } else {
+      console.warn('[Gemini:adapter] setPrompt: readback not confirmed (got="' + got.slice(0, 30) + '"), will still attempt submit');
     }
   }
 
   override async submit(): Promise<void> {
-    await sleep(250);
+    await sleep(300);
 
-    // If input is empty, rewrite once
+    // Re-check input has content; if empty, retry write
     const input = this.findInput();
     if (input && this.readBack(input).length < 2) {
+      console.warn('[Gemini:adapter] submit: input appears empty, re-writing prompt');
       await this.setPrompt(this.lastPrompt);
     }
 
-    // Try to find send button (including disabled, since Gemini briefly disables it)
+    // Find send button with detailed logging
     const findBtn = (): HTMLButtonElement | null => {
       // 1. By selector list (custom first via effectiveSubmitSelectors)
       for (const s of this.effectiveSubmitSelectors) {
-        const el = [...document.querySelectorAll(s)].find((e) => this.isVisible(e)) as HTMLButtonElement | undefined;
-        if (el) {
-          console.log('[Gemini:adapter] Send btn found: selector="' + s + '", label=' + el.getAttribute('aria-label'));
-          return el;
+        const matches = [...document.querySelectorAll(s)] as HTMLElement[];
+        const visible = matches.filter((e) => this.isVisible(e));
+        if (visible.length > 0) {
+          const btn = visible[0] as HTMLButtonElement;
+          console.log('[Gemini:adapter] Send btn found: selector="' + s + '", label=' + btn.getAttribute('aria-label') + ', disabled=' + btn.disabled + ', visibleBtns=' + visible.length);
+          return btn;
         }
       }
 
-      // 2. Full button scan
+      // 2. Full button scan with keyword matching
       const allBtns = [...document.querySelectorAll('button')] as HTMLButtonElement[];
-      const keywords = ['send', '\u53d1\u9001', 'submit', '\u63d0\u4ea4'];
-      for (const b of allBtns) {
-        if (!this.isVisible(b)) continue;
+      const visibleBtns = allBtns.filter((b) => this.isVisible(b));
+      const keywords = ['send', '\u53d1\u9001', 'submit', '\u63d0\u4ea4', 'arrow', '\u2192'];
+      for (const b of visibleBtns) {
         const label = (b.getAttribute('aria-label') || b.textContent || '').toLowerCase();
-        if (keywords.some((k) => label.includes(k))) {
-          console.log('[Gemini:adapter] Send btn(scan): label="' + b.getAttribute('aria-label') + '", text="' + (b.textContent || '').trim().slice(0, 30) + '"');
+        const title = (b.getAttribute('title') || '').toLowerCase();
+        const combined = label + ' ' + title;
+        if (keywords.some((k) => combined.includes(k))) {
+          console.log('[Gemini:adapter] Send btn(scan): label="' + b.getAttribute('aria-label') + '", title="' + b.getAttribute('title') + '", text="' + (b.textContent || '').trim().slice(0, 20) + '"');
           return b;
         }
       }
 
-      console.warn('[Gemini:adapter] No send btn found, ' + allBtns.filter((b) => this.isVisible(b)).length + ' visible buttons on page');
+      // 3. Log all visible buttons for debugging
+      console.warn('[Gemini:adapter] No send btn found. Visible buttons (' + visibleBtns.length + '):');
+      visibleBtns.forEach((b, i) => {
+        console.warn('  btn[' + i + ']: aria-label="' + b.getAttribute('aria-label') + '", title="' + b.getAttribute('title') + '", disabled=' + b.disabled + ', text="' + (b.textContent || '').trim().slice(0, 20) + '", class=' + b.className.slice(0, 40));
+      });
+
       return null;
     };
 
+    // Aggressive click simulation that handles disabled buttons
     const tryClick = (btn: HTMLButtonElement): void => {
-      const was = btn.disabled;
-      btn.disabled = false;
-      btn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-      btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-      btn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
-      btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-      btn.click();
-      btn.disabled = was;
+      const wasDisabled = btn.disabled;
+
+      // Force-enable if disabled (framework may disable until it detects input)
+      if (wasDisabled) {
+        console.warn('[Gemini:adapter] Force-enabling disabled submit button');
+        btn.disabled = false;
+        btn.removeAttribute('disabled');
+        btn.removeAttribute('aria-disabled');
+      }
+
+      // Full pointer/mouse event sequence
+      btn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, composed: true }));
+      btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      btn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, composed: true }));
+      btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+
+      // Restore disabled state after a tick
+      if (wasDisabled) {
+        setTimeout(() => { btn.disabled = true; }, 100);
+      }
+
+      console.log('[Gemini:adapter] Clicked submit button (wasDisabled=' + wasDisabled + ')');
     };
 
     const btn = findBtn();
     if (btn) {
       tryClick(btn);
-      // Gemini sometimes ignores first click; verify and retry if needed
-      await sleep(900);
-      const stillThere = input && this.readBack(input).length >= 2;
-      const responded = pageText().length > this.preSendLen + 24;
-      if (stillThere && !responded) {
-        console.warn('[Gemini:adapter] First click had no effect, retrying');
+
+      // Wait and verify response
+      await sleep(1200);
+      const inputStillHasText = input && this.readBack(input).length >= 2;
+      const pageChanged = pageText().length > this.preSendLen + 24;
+
+      if (inputStillHasText && !pageChanged) {
+        console.warn('[Gemini:adapter] First click had no visible effect, retrying...');
+        // Re-write prompt (in case first click cleared it)
         await this.setPrompt(this.lastPrompt);
+        await sleep(200);
         const btn2 = findBtn();
-        if (btn2) tryClick(btn2);
-        else if (input) this.fireEnter(input);
+        if (btn2) {
+          tryClick(btn2);
+        } else if (input) {
+          console.warn('[Gemini:adapter] Button disappeared, trying Enter key');
+          input.focus();
+          this.fireEnter(input);
+        }
+      } else {
+        console.log('[Gemini:adapter] Submit appears successful (pageChanged=' + pageChanged + ')');
       }
       return;
     }
 
+    // No button found — try Enter key as last resort
     if (input) {
+      console.warn('[Gemini:adapter] No submit button, attempting Enter key submission');
       input.focus();
+      await sleep(100);
       this.fireEnter(input);
       return;
     }
@@ -330,7 +407,7 @@ export class GeminiAdapter extends BaseAdapter {
       const show = body || (started ? STREAM_CONFIG.THINKING_PLACEHOLDER : '');
       if (show && show !== lastSent && now - lastEmit >= STREAM_CONFIG.STREAM_THROTTLE_MS) { lastSent = show; lastEmit = now; onUpdate(show); }
       if (body) { if (body !== lastReal) { lastReal = body; stableSince = now; } } else { lastReal = ''; stableSince = 0; }
-      const hasProgress = /(\u601d\u8003\u4e2d|\u641c\u7d22\u4e2d|\u8054\u7f51\u641c\u7d22\u4e2d|\u751f\u6210\u4e2d|\u6b63\u5728\u641c\u7d22|\u6b63\u5728\u601d\u8003|\u6b57\u5728\u9605\u8bfb|\u6b57\u5728\u8054\u7f51|Searching(?! for)|Reading\s+\d)/i.test(body);
+      const hasProgress = /(\u601d\u8003\u4e2d|\u641c\u7d22\u4e2d|\u8054\u7f51\u641c\u7d22\u4e2d|\u751f\u6210\u4e2d|\u6b63\u5728\u641c\u7d22|\u6b63\u5728\u601d\u8003|\u6b57\u5728\u9608\u8bfb|\u6b57\u5728\u8054\u7f51|Searching(?! for)|Reading\s+\d)/i.test(body);
       const elapsed = body ? now - stableSince : 0;
       const need = hasProgress ? STREAM_CONFIG.SOFT_STABLE : STREAM_CONFIG.HARD_STABLE;
       const done = !!body && body === lastReal && (elapsed >= need || elapsed >= STREAM_CONFIG.ABS_CAP);
