@@ -101,6 +101,8 @@ export interface RunRecord {
   id: string;
   name: string;
   createdAt: number;
+  /** 最近一次运行/覆盖时间（同起点去重后每次运行都会更新） */
+  updatedAt: number;
   status: 'success' | 'partial' | 'error';
   nodeCount: number;
   startPrompt: string;
@@ -320,6 +322,7 @@ function buildRunRecord(nodes: WBNode[], edges: Edge[]): RunRecord {
     id: `run_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e4)}`,
     name: (startNode?.data.prompt || '未命名工作流').split('\n')[0].slice(0, 30) || '未命名工作流',
     createdAt: Date.now(),
+    updatedAt: Date.now(),
     status,
     nodeCount: nodes.length,
     startPrompt: startNode?.data.prompt ?? '',
@@ -977,7 +980,23 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
   recordRun: () => {
     const rec = buildRunRecord(get().nodes, get().edges);
-    const next = [rec, ...get().runHistory].slice(0, HISTORY_CAP);
+    const now = Date.now();
+    // 同一起点（startPrompt 相同）只保留一条历史：覆盖旧记录、更新到顶部，
+    // 避免同一次输入反复运行在「历史」里堆出多条相同起点。
+    const sameStartIdx = get().runHistory.findIndex((r) => r.startPrompt === rec.startPrompt);
+    let next: RunRecord[];
+    if (sameStartIdx >= 0) {
+      const merged: RunRecord = {
+        ...get().runHistory[sameStartIdx],
+        ...rec,
+        id: get().runHistory[sameStartIdx].id, // 保留原 id，便于导出/删除定位
+        createdAt: get().runHistory[sameStartIdx].createdAt,
+        updatedAt: now,
+      };
+      next = [merged, ...get().runHistory.filter((_, i) => i !== sameStartIdx)].slice(0, HISTORY_CAP);
+    } else {
+      next = [{ ...rec, updatedAt: now }, ...get().runHistory].slice(0, HISTORY_CAP);
+    }
     set({ runHistory: next });
     try {
       void chrome.storage.local.set({ [HISTORY_KEY]: next });

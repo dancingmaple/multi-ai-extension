@@ -88,7 +88,8 @@ export function RunHistoryPanel() {
                   <div className="wb-list__main">
                     <div className="wb-list__title">{r.name}</div>
                     <div className="wb-list__meta">
-                      {new Date(r.createdAt).toLocaleString('zh-CN')} · {r.nodeCount} 节点 ·{' '}
+                      最近更新 {new Date(r.updatedAt ?? r.createdAt).toLocaleString('zh-CN')} ·{' '}
+                      {r.nodeCount} 节点 ·{' '}
                       <span className={`wb-badge wb-badge--${r.status}`}>{runStatusLabel(r.status)}</span>
                     </div>
                   </div>
