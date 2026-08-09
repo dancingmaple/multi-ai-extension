@@ -109,19 +109,107 @@ export function makeNode(nodeType: WorkbenchNodeType, position: { x: number; y: 
   };
 }
 
-/** 默认示例工作流：Start → Summarize → Process → End */
+/** 默认写作流程工作流：主题 → 多AI搜材&角度 → 大纲 → 创作 → 公众号排版 → 终稿 */
 export function seedWorkflow(): { nodes: WBNode[]; edges: Edge[] } {
+  // 蛇形横向布局，避免连线交叉
   const start = makeNode('start', { x: 40, y: 220 });
-  const summarize = makeNode('summarize', { x: 380, y: 120 });
-  const process = makeNode('process', { x: 380, y: 320 });
-  const end = makeNode('end', { x: 740, y: 220 });
+  const research = makeNode('summarize', { x: 400, y: 90 });
+  const outline = makeNode('process', { x: 760, y: 220 });
+  const draft = makeNode('process', { x: 1120, y: 90 });
+  const layout = makeNode('process', { x: 1480, y: 220 });
+  const end = makeNode('end', { x: 1840, y: 150 });
+
+  // ── 节点 1：主题输入 ──
+  start.data.label = '主题输入';
+  start.data.prompt = '在这里输入你的文章主题（或一段素材），例如：\n「AI 时代，个人应该如何重新学习？」';
+  start.data.varName = 'topic';
+
+  // ── 节点 2：多 AI 并行搜材 + 多角度解析 ──
+  research.data.label = '多AI搜材&角度解析';
+  research.data.providers = ['chatgpt', 'gemini', 'deepseek'];
+  research.data.varName = 'research';
+  research.data.prompt = `主题：{{topic}}
+
+请扮演资深内容研究员，围绕该主题做两件事：
+
+【任务一 · 搜集材料】输出 3-5 条高质量材料（事实 / 数据 / 案例 / 金句），每条注明出处类型（行业报告 / 新闻 / 书籍 / 常识共识）。
+
+【任务二 · 角度解析】从你最有价值的视角给出 3 个独特分析角度，每个角度：一句话点透 + 1-2 条支撑材料。
+
+要求：宁缺毋滥，只输出有真实增量的内容，不要空话套话。`;
+
+  // ── 节点 3：整合大纲 ──
+  outline.data.label = '大纲整合';
+  outline.data.providers = ['deepseek'];
+  outline.data.varName = 'outline';
+  outline.data.prompt = `主题：{{topic}}
+
+以下是多家 AI 围绕该主题搜集的材料与角度：
+{{research}}
+
+请整合成一篇公众号文章大纲：
+- 标题：主标题 1 个 + 备选 2 个（有吸引力，带数字或冲突感）
+- 引言：1 段钩子式开头，引发好奇
+- 正文：3-4 个小节，每节给出小标题 + 核心观点 + 可引用的材料
+- 结尾：1 段升华 + 行动号召
+
+要求：逻辑递进、详略得当，避免堆砌材料。`;
+
+  // ── 节点 4：文章创作 ──
+  draft.data.label = '文章创作';
+  draft.data.providers = ['chatgpt'];
+  draft.data.varName = 'draft';
+  draft.data.prompt = `请根据以下大纲与材料，写一篇完整的公众号文章。
+
+主题：{{topic}}
+大纲：{{outline}}
+材料与角度：{{research}}
+
+要求：
+- 全文 1200-2000 字，小标题分段
+- 开头 3 句话抓住读者，有具体案例/数据支撑
+- 语气：专业但不端着，像资深编辑写给朋友
+- 结尾自然引导关注/转发
+直接输出正文，不要解释。`;
+
+  // ── 节点 5：公众号排版（输出 HTML） ──
+  layout.data.label = '公众号排版';
+  layout.data.providers = ['gemini'];
+  layout.data.varName = 'html';
+  layout.data.prompt = `请把以下文章排版成「微信公众号可直接粘贴」的 HTML 代码。
+
+文章：
+{{draft}}
+
+要求：
+- 输出完整 HTML（含 html/head/body），CSS 用内联 style 或 style 块（公众号不支持外部样式表）
+- 移动端优先：正文 15px、行高 1.75、两端对齐、字色 #3f3f3f
+- 小标题：深色加粗 + 左侧强调边框（#2f6fed 蓝或 #e8730a 橙）
+- 金句/重点句：浅色背景块（#f7f8fa）+ 左边框
+- 段落间距适中，开头配一句引导语
+- 结尾留「关注引导」区块
+只输出 HTML 代码，不要 markdown 标记、不要任何解释。`;
+
+  // ── 节点 6：终稿输出 ──
+  end.data.label = '终稿输出';
+  end.data.prompt = `## 公众号排版成品（复制到公众号编辑器）
+
+{{html}}
+
+---
+
+## 文章全文（备查）
+
+{{draft}}`;
+
   const edges: Edge[] = [
-    { id: `e_${start.id}_${summarize.id}`, source: start.id, target: summarize.id, animated: true },
-    { id: `e_${start.id}_${process.id}`, source: start.id, target: process.id, animated: true },
-    { id: `e_${summarize.id}_${end.id}`, source: summarize.id, target: end.id, animated: true },
-    { id: `e_${process.id}_${end.id}`, source: process.id, target: end.id, animated: true },
+    { id: `e_${start.id}_${research.id}`, source: start.id, target: research.id, animated: true },
+    { id: `e_${research.id}_${outline.id}`, source: research.id, target: outline.id, animated: true },
+    { id: `e_${outline.id}_${draft.id}`, source: outline.id, target: draft.id, animated: true },
+    { id: `e_${draft.id}_${layout.id}`, source: draft.id, target: layout.id, animated: true },
+    { id: `e_${layout.id}_${end.id}`, source: layout.id, target: end.id, animated: true },
   ];
-  return { nodes: [start, summarize, process, end], edges };
+  return { nodes: [start, research, outline, draft, layout, end], edges };
 }
 
 /** 把所有节点的输出汇总成模板渲染所需的 map（按节点 ID 索引，带缓存） */
