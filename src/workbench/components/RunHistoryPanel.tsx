@@ -5,13 +5,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useWorkflowStore } from '../store/workflowStore';
 import { buildRunMarkdown, runStatusLabel } from '../utils/export';
-import { HistoryIcon, CloseIcon, CopyIcon, DownloadIcon, CheckIcon, ArrowLeftIcon } from './icons';
+import { HistoryIcon, CloseIcon, CopyIcon, DownloadIcon, CheckIcon, ArrowLeftIcon, ArrowRightIcon } from './icons';
 
 export function RunHistoryPanel() {
   const history = useWorkflowStore((s) => s.runHistory);
   const deleteRunHistory = useWorkflowStore((s) => s.deleteRunHistory);
   const clearRunHistory = useWorkflowStore((s) => s.clearRunHistory);
   const exportRun = useWorkflowStore((s) => s.exportRun);
+  const restoreRunToCanvas = useWorkflowStore((s) => s.restoreRunToCanvas);
   const closePanel = useWorkflowStore((s) => s.closePanel);
 
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -64,6 +65,14 @@ export function RunHistoryPanel() {
                 </button>
                 <div className="wb-detail__title">{detail.name}</div>
                 <div className="wb-detail__acts">
+                  <button
+                    className="wb-btn wb-btn--sm"
+                    onClick={() => restoreRunToCanvas(detail.id)}
+                    title="把该次运行的节点布局/提示词/结果还原到画布"
+                  >
+                    <ArrowRightIcon size={12} />
+                    恢复到画布
+                  </button>
                   <button className="wb-btn wb-btn--sm" onClick={() => void copyMd()}>
                     {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
                     {copied ? '已复制' : '复制 MD'}

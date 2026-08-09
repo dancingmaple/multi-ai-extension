@@ -94,6 +94,8 @@ export interface RunNodeResult {
   /** 每家 AI 回答后所在会话的最终地址（回看/溯源） */
   urls?: Partial<Record<ProviderName, string>>;
   error?: string;
+  /** 节点在画布上的位置（供历史「恢复到画布」还原布局） */
+  position?: { x: number; y: number };
 }
 
 /** 一次工作流运行的历史记录 */
@@ -307,6 +309,7 @@ function buildRunRecord(nodes: WBNode[], edges: Edge[]): RunRecord {
     outputs: n.data.outputs,
     urls: n.data.urls,
     error: n.data.error,
+    position: { x: n.position.x, y: n.position.y },
   }));
   const startNode = nodes.find((n) => n.data.nodeType === 'start');
   const hasErr = nodes.some((n) => n.data.status === 'error');
@@ -506,6 +509,9 @@ interface WorkflowState {
   // ── 会话坞（侧边嵌入/聚焦 AI 标签页）开关 ──
   dockOpen: boolean;
   toggleDock: () => void;
+  /** 手动获取的逐平台进度（正在抓哪家的哪节点）；null = 无进行中的抓取 */
+  grabProgress: { nodeId: string; provider: ProviderName } | null;
+  setGrabProgress: (p: { nodeId: string; provider: ProviderName } | null) => void;
 
   // ── ReactFlow 编辑回调 ──
   onNodesChange: (changes: NodeChange[]) => void;
@@ -549,6 +555,8 @@ interface WorkflowState {
   deleteRunHistory: (id: string) => void;
   clearRunHistory: () => void;
   exportRun: (id?: string) => void;
+  /** 把某条历史记录还原到画布（含节点位置/提示词/输出），便于复现或续跑 */
+  restoreRunToCanvas: (id: string) => void;
 
   // ── 浮层 ──
   openPanel: (panel: 'saved' | 'history') => void;
@@ -563,6 +571,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   runHistory: [],
   panel: 'none',
   dockOpen: false,
+  grabProgress: null,
+  setGrabProgress: (p) => set({ grabProgress: p }),
 
   onNodesChange: (changes) => {
     set({ nodes: applyNodeChanges(changes, get().nodes) });
@@ -637,13 +647,22 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     // 手动获取是「用户主动要最新内容」：抓取成功的项强制覆盖旧值，
     // 避免界面一直显示上一次的结果；抓不到的家才保留旧值并记错误。
     get().updateNodeData(id, { error: undefined });
+    const merged: Partial<Record<ProviderName, string>> = { ...(prevOutputs as Record<ProviderName, string>) };
+    const errs: Partial<Record<ProviderName, string>> = {};
+    const urls: Partial<Record<ProviderName, string>> = { ...(prevUrls as Record<ProviderName, string>) };
+    const tabIds: Partial<Record<ProviderName, number>> = { ...(prevTabIds as Record<ProviderName, number>) };
     try {
-      const result = await sendWorkbenchGrab(sendPrompt, providers, id, taskId, prevTabIds, prevUrls);
-      const merged: Partial<Record<ProviderName, string>> = { ...(prevOutputs as Record<ProviderName, string>) };
-      const errs: Partial<Record<ProviderName, string>> = {};
-      const urls: Partial<Record<ProviderName, string>> = { ...(prevUrls as Record<ProviderName, string>) };
-      const tabIds: Partial<Record<ProviderName, number>> = { ...(prevTabIds as Record<ProviderName, number>) };
+      // 逐家抓取：每家完成后更新一次进度，用户能看到「正在抓 ChatGPT / 正在抓 Qwen…」
       for (const p of providers) {
+        get().setGrabProgress({ nodeId: id, provider: p });
+        const result = await sendWorkbenchGrab(
+          sendPrompt,
+          [p],
+          id,
+          taskId,
+          tabIds[p] !== undefined ? { [p]: tabIds[p] } : undefined,
+          urls[p] ? { [p]: urls[p] } : undefined
+        );
         const txt = result.outputs[p];
         if (txt && txt.length > 0) {
           // 手动获取 = 强制刷新：抓到的新内容直接覆盖旧内容
@@ -672,6 +691,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       });
     } catch (e) {
       get().updateNodeData(id, { error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      get().setGrabProgress(null);
     }
   },
 
@@ -1055,6 +1076,32 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     } catch {
       /* 静默 */
     }
+  },
+
+  restoreRunToCanvas: (id) => {
+    const rec = get().runHistory.find((r) => r.id === id);
+    if (!rec) return;
+    // 用历史快照重建节点（含提示词/输出/位置），edges 直接还原
+    const nodes: WBNode[] = rec.nodes.map((n) => ({
+      id: n.id,
+      type: n.nodeType,
+      position: n.position ?? { x: 120, y: 120 },
+      data: {
+        label: n.label,
+        nodeType: n.nodeType,
+        prompt: n.prompt,
+        providers: n.providers,
+        varName: n.varName,
+        output: n.output,
+        outputs: n.outputs as Partial<Record<ProviderName, string>>,
+        status: n.status,
+        renderedPrompt: n.renderedPrompt,
+        urls: n.urls,
+        error: n.error,
+      },
+    }));
+    set({ nodes, edges: rec.edges, panel: 'none' });
+    void get().save();
   },
 
   clearRunHistory: () => {

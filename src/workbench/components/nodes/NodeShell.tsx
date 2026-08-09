@@ -154,6 +154,10 @@ export const NodeShell = memo(function NodeShell({
       setDelayDraft(data.grabDelay === undefined ? '' : String(data.grabDelay));
   }, [data.grabDelay]);
 
+  // 手动获取的逐平台进度：正在抓取本节点的哪家 AI
+  const grabProgress = useWorkflowStore((s) => s.grabProgress);
+  const grabbingProvider = grabProgress && grabProgress.nodeId === id ? grabProgress.provider : null;
+
   // 自动获取倒计时（本地心跳，仅用于显示）
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -511,7 +515,13 @@ export const NodeShell = memo(function NodeShell({
               title="自动抓取可能漏掉回答：从各家标签页重新读屏补全"
             >
               <RefreshIcon size={12} />
-              {grabbing ? '获取中…' : missingCount > 0 ? '手动获取' : '重新获取'}
+              {grabbingProvider
+                ? `正在抓 ${PROVIDER_LABELS[grabbingProvider]}…`
+                : grabbing
+                  ? '获取中…'
+                  : missingCount > 0
+                    ? '手动获取'
+                    : '重新获取'}
             </button>
           )}
           {data.status === 'reviewing' && (
