@@ -25,9 +25,9 @@ import type {
   WorkbenchExecuteMessage,
   WorkbenchGrabMessage,
   WorkbenchGrabResult,
-} from '@shared/types';
-import { PROVIDER_LABELS } from '@shared/constants';
-import { renderTemplate, type NodeOutput } from '../utils/template';
+} from '../../shared/types';
+import { PROVIDER_LABELS } from '../../shared/constants';
+import { renderTemplate } from '../utils/template';
 import {
   buildRunMarkdown,
   buildDraftMarkdown,
@@ -35,8 +35,22 @@ import {
   safeFileName,
   tsStamp,
 } from '../utils/export';
+import {
+  buildOutputMap,
+  buildVarMap,
+  buildRunRecord,
+  descendants,
+  joinOutputs,
+  makeNode,
+  sanitizeEdges,
+  sanitizeNodes,
+  seedWorkflow,
+  topoOrder,
+} from './workflowUtils';
+import type { NodeStatus as NodeStatusT } from './workflowUtils';
 
-export type NodeStatus = 'idle' | 'running' | 'reviewing' | 'success' | 'error';
+/** 节点状态机定义见 workflowUtils（可单测），这里 re-export 保持兼容 */
+export type NodeStatus = NodeStatusT;
 
 export interface WorkbenchNodeData {
   label: string;
@@ -117,247 +131,6 @@ const SAVED_KEY = 'workbench_saved_v1';
 const HISTORY_KEY = 'workbench_history_v1';
 const HISTORY_CAP = 50;
 
-let nodeSeq = 0;
-function nid(): string {
-  nodeSeq += 1;
-  return `n_${Date.now().toString(36)}_${nodeSeq}`;
-}
-
-function defaultData(nodeType: WorkbenchNodeType): WorkbenchNodeData {
-  const presets: Record<
-    WorkbenchNodeType,
-    { label: string; prompt: string; providers: ProviderName[]; varName?: string }
-  > = {
-    start: {
-      label: '起点 · 输入',
-      prompt: '在这里写下你的原始问题 / 素材……',
-      providers: [],
-      varName: 'input',
-    },
-    summarize: {
-      label: '汇总',
-      prompt: '请把以下内容整理成简明摘要：\n\n{{input}}',
-      providers: ['chatgpt', 'gemini'],
-      varName: 'summary',
-    },
-    process: {
-      label: '处理',
-      prompt: '基于以下摘要，给出可执行的方案：\n\n{{summary}}',
-      providers: ['deepseek', 'qwen'],
-      varName: 'plan',
-    },
-    end: {
-      label: '终点 · 输出',
-      prompt: '最终交付物：\n\n{{summary}}\n\n{{plan}}',
-      providers: [],
-    },
-  };
-  const p = presets[nodeType];
-  return {
-    label: p.label,
-    nodeType,
-    prompt: p.prompt,
-    providers: p.providers,
-    varName: p.varName,
-    output: '',
-    outputs: {},
-    status: 'idle',
-  };
-}
-
-function makeNode(nodeType: WorkbenchNodeType, position: { x: number; y: number }): WBNode {
-  return {
-    id: nid(),
-    type: nodeType,
-    position,
-    data: defaultData(nodeType),
-  };
-}
-
-/** 默认示例工作流：Start → Summarize → Process → End */
-function seedWorkflow(): { nodes: WBNode[]; edges: Edge[] } {
-  const start = makeNode('start', { x: 40, y: 220 });
-  const summarize = makeNode('summarize', { x: 380, y: 120 });
-  const process = makeNode('process', { x: 380, y: 320 });
-  const end = makeNode('end', { x: 740, y: 220 });
-  const edges: Edge[] = [
-    { id: `e_${start.id}_${summarize.id}`, source: start.id, target: summarize.id, animated: true },
-    { id: `e_${start.id}_${process.id}`, source: start.id, target: process.id, animated: true },
-    { id: `e_${summarize.id}_${end.id}`, source: summarize.id, target: end.id, animated: true },
-    { id: `e_${process.id}_${end.id}`, source: process.id, target: end.id, animated: true },
-  ];
-  return { nodes: [start, summarize, process, end], edges };
-}
-
-/** 渲染依赖缓存：以「节点数组引用 + 各节点输出引用」为 key，输出未变时复用 map */
-let outputMapCache: { key: unknown[]; value: Record<string, NodeOutput> } | null = null;
-let varMapCache: { key: unknown[]; value: Record<string, NodeOutput> } | null = null;
-
-/** 输出相关引用序列（任一节点输出引用变化 → key 变化 → 重建） */
-function outputKey(nodes: WBNode[]): unknown[] {
-  return nodes.map((n) => [n.id, n.data.output, n.data.outputs, n.data.varName]);
-}
-
-/** 把所有节点的输出汇总成模板渲染所需的 map（按节点 ID 索引，带缓存） */
-function buildOutputMap(nodes: WBNode[]): Record<string, NodeOutput> {
-  const key = outputKey(nodes);
-  if (outputMapCache && outputMapCache.key.length === key.length && outputMapCache.key.every((k, i) => k === key[i])) {
-    return outputMapCache.value;
-  }
-  const map: Record<string, NodeOutput> = {};
-  for (const n of nodes) {
-    map[n.id] = { output: n.data.output, outputs: n.data.outputs as Record<string, string> };
-  }
-  outputMapCache = { key, value: map };
-  return map;
-}
-
-/** 把所有「设置了变量名」的节点输出汇总成 map（按变量名索引，优先级高于节点 ID，带缓存） */
-function buildVarMap(nodes: WBNode[]): Record<string, NodeOutput> {
-  const key = outputKey(nodes);
-  if (varMapCache && varMapCache.key.length === key.length && varMapCache.key.every((k, i) => k === key[i])) {
-    return varMapCache.value;
-  }
-  const map: Record<string, NodeOutput> = {};
-  for (const n of nodes) {
-    const name = n.data.varName?.trim();
-    if (name) {
-      map[name] = { output: n.data.output, outputs: n.data.outputs as Record<string, string> };
-    }
-  }
-  varMapCache = { key, value: map };
-  return map;
-}
-
-/** 拓扑排序（Kahn）。存在环时，剩余节点按原顺序追加在末尾。 */
-function topoOrder(nodes: WBNode[], edges: Edge[]): WBNode[] {
-  const indeg = new Map<string, number>();
-  const adj = new Map<string, string[]>();
-  nodes.forEach((n) => {
-    indeg.set(n.id, 0);
-    adj.set(n.id, []);
-  });
-  edges.forEach((e) => {
-    if (indeg.has(e.target) && adj.has(e.source)) {
-      indeg.set(e.target, (indeg.get(e.target) ?? 0) + 1);
-      adj.get(e.source)!.push(e.target);
-    }
-  });
-  const queue = nodes.filter((n) => (indeg.get(n.id) ?? 0) === 0).map((n) => n.id);
-  const order: string[] = [];
-  const seen = new Set<string>();
-  while (queue.length) {
-    const id = queue.shift()!;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    order.push(id);
-    for (const nxt of adj.get(id) ?? []) {
-      indeg.set(nxt, (indeg.get(nxt) ?? 0) - 1);
-      if ((indeg.get(nxt) ?? 0) === 0) queue.push(nxt);
-    }
-  }
-  nodes.forEach((n) => {
-    if (!seen.has(n.id)) order.push(n.id);
-  });
-  return order.map((id) => nodes.find((n) => n.id === id)!).filter(Boolean);
-}
-
-/** 取从 startId 出发可达的全部后代节点 id（含自身） */
-function descendants(startId: string, edges: Edge[]): Set<string> {
-  const adj = new Map<string, string[]>();
-  edges.forEach((e) => {
-    if (!adj.has(e.source)) adj.set(e.source, []);
-    adj.get(e.source)!.push(e.target);
-  });
-  const out = new Set<string>([startId]);
-  const stack = [startId];
-  while (stack.length) {
-    const cur = stack.pop()!;
-    for (const nxt of adj.get(cur) ?? []) {
-      if (!out.has(nxt)) {
-        out.add(nxt);
-        stack.push(nxt);
-      }
-    }
-  }
-  return out;
-}
-
-function joinOutputs(
-  outputs: Partial<Record<ProviderName, string>>,
-  providers: ProviderName[]
-): string {
-  return providers
-    .filter((p) => outputs[p] && outputs[p]!.length > 0)
-    .map((p) => `## ${PROVIDER_LABELS[p]}\n${outputs[p]}`)
-    .join('\n\n');
-}
-
-/** 仅保留可序列化、装载回 ReactFlow 所需的字段（去掉 measured/selected/dragging 等瞬态） */
-function sanitizeNodes(nodes: WBNode[]): WBNode[] {
-  return nodes.map((n) => ({
-    id: n.id,
-    type: n.type,
-    position: { x: n.position.x, y: n.position.y },
-    data: n.data,
-  }));
-}
-
-function sanitizeEdges(edges: Edge[]): Edge[] {
-  return edges.map((e) => ({
-    id: e.id,
-    source: e.source,
-    target: e.target,
-    animated: e.animated,
-    label: e.label,
-  }));
-}
-
-/** 从当前节点状态构建一次运行的记录（长文本截断，避免 storage 膨胀） */
-function buildRunRecord(nodes: WBNode[], edges: Edge[]): RunRecord {
-  // 历史记录里单家回答最大保留长度：超过则截断（画布节点仍保留完整内容）
-  const MAX_TEXT = 8000;
-  const trunc = (s: string): string =>
-    s.length > MAX_TEXT ? s.slice(0, MAX_TEXT) + '\n…（历史记录已截断）' : s;
-  const runNodes: RunNodeResult[] = nodes.map((n) => ({
-    id: n.id,
-    label: n.data.label,
-    nodeType: n.data.nodeType,
-    varName: n.data.varName,
-    providers: n.data.providers,
-    status: n.data.status,
-    prompt: n.data.prompt,
-    renderedPrompt: n.data.renderedPrompt,
-    output: trunc(n.data.output),
-    outputs: Object.fromEntries(
-      Object.entries(n.data.outputs).map(([p, c]) => [p, c ? trunc(c) : c] as [string, string | undefined])
-    ) as Partial<Record<ProviderName, string>>,
-    urls: n.data.urls,
-    error: n.data.error,
-    position: { x: n.position.x, y: n.position.y },
-  }));
-  const startNode = nodes.find((n) => n.data.nodeType === 'start');
-  const hasErr = nodes.some((n) => n.data.status === 'error');
-  const hasOk = nodes.some(
-    (n) => n.data.status === 'success' || n.data.status === 'reviewing' || n.data.output
-  );
-  const status: RunRecord['status'] = !hasErr
-    ? 'success'
-    : hasOk
-      ? 'partial'
-      : 'error';
-  return {
-    id: `run_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e4)}`,
-    name: (startNode?.data.prompt || '未命名工作流').split('\n')[0].slice(0, 30) || '未命名工作流',
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    status,
-    nodeCount: nodes.length,
-    startPrompt: startNode?.data.prompt ?? '',
-    nodes: runNodes,
-    edges: sanitizeEdges(edges),
-  };
-}
 
 /** 通过 background 执行一次 AI 调用（WORKBENCH_EXECUTE） */
 function sendWorkbenchExecute(
@@ -640,7 +413,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       ...(node.data.outputs as Record<ProviderName, string>),
     };
     outputs[provider] = text;
-    const output = joinOutputs(outputs, node.data.providers);
+    const output = joinOutputs(outputs, node.data.providers, PROVIDER_LABELS);
     get().updateNodeData(id, { outputs, output });
   },
 
@@ -699,7 +472,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         if (result.tabIds?.[p] !== undefined) tabIds[p] = result.tabIds[p];
       }
       const answered = providers.filter((p) => merged[p] && merged[p]!.length > 0);
-      const output = joinOutputs(merged, providers);
+      const output = joinOutputs(merged, providers, PROVIDER_LABELS);
       const errMsg = Object.keys(errs).length
         ? Object.values(errs).join('；')
         : answered.length
@@ -812,7 +585,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       const result = await sendWorkbenchExecute(rendered, providers, id, nodeType);
       const hasOutput = !!result && Object.keys(result.outputs).length > 0;
       if (result && (result.ok || hasOutput)) {
-        const output = joinOutputs(result.outputs, providers);
+        const output = joinOutputs(result.outputs, providers, PROVIDER_LABELS);
         // 部分成功：只要有 ≥1 个 provider 返回正文就进入「待采纳」，
         // 同时把失败 provider 的原因带上，便于排查（不会因单点失败拖垮整条链）。
         const errMsg =
