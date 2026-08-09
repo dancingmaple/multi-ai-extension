@@ -189,17 +189,35 @@ function seedWorkflow(): { nodes: WBNode[]; edges: Edge[] } {
   return { nodes: [start, summarize, process, end], edges };
 }
 
-/** 把所有节点的输出汇总成模板渲染所需的 map（按节点 ID 索引） */
+/** 渲染依赖缓存：以「节点数组引用 + 各节点输出引用」为 key，输出未变时复用 map */
+let outputMapCache: { key: unknown[]; value: Record<string, NodeOutput> } | null = null;
+let varMapCache: { key: unknown[]; value: Record<string, NodeOutput> } | null = null;
+
+/** 输出相关引用序列（任一节点输出引用变化 → key 变化 → 重建） */
+function outputKey(nodes: WBNode[]): unknown[] {
+  return nodes.map((n) => [n.id, n.data.output, n.data.outputs, n.data.varName]);
+}
+
+/** 把所有节点的输出汇总成模板渲染所需的 map（按节点 ID 索引，带缓存） */
 function buildOutputMap(nodes: WBNode[]): Record<string, NodeOutput> {
+  const key = outputKey(nodes);
+  if (outputMapCache && outputMapCache.key.length === key.length && outputMapCache.key.every((k, i) => k === key[i])) {
+    return outputMapCache.value;
+  }
   const map: Record<string, NodeOutput> = {};
   for (const n of nodes) {
     map[n.id] = { output: n.data.output, outputs: n.data.outputs as Record<string, string> };
   }
+  outputMapCache = { key, value: map };
   return map;
 }
 
-/** 把所有「设置了变量名」的节点输出汇总成 map（按变量名索引，优先级高于节点 ID） */
+/** 把所有「设置了变量名」的节点输出汇总成 map（按变量名索引，优先级高于节点 ID，带缓存） */
 function buildVarMap(nodes: WBNode[]): Record<string, NodeOutput> {
+  const key = outputKey(nodes);
+  if (varMapCache && varMapCache.key.length === key.length && varMapCache.key.every((k, i) => k === key[i])) {
+    return varMapCache.value;
+  }
   const map: Record<string, NodeOutput> = {};
   for (const n of nodes) {
     const name = n.data.varName?.trim();
@@ -207,6 +225,7 @@ function buildVarMap(nodes: WBNode[]): Record<string, NodeOutput> {
       map[name] = { output: n.data.output, outputs: n.data.outputs as Record<string, string> };
     }
   }
+  varMapCache = { key, value: map };
   return map;
 }
 
@@ -294,8 +313,12 @@ function sanitizeEdges(edges: Edge[]): Edge[] {
   }));
 }
 
-/** 从当前节点状态构建一次运行的记录 */
+/** 从当前节点状态构建一次运行的记录（长文本截断，避免 storage 膨胀） */
 function buildRunRecord(nodes: WBNode[], edges: Edge[]): RunRecord {
+  // 历史记录里单家回答最大保留长度：超过则截断（画布节点仍保留完整内容）
+  const MAX_TEXT = 8000;
+  const trunc = (s: string): string =>
+    s.length > MAX_TEXT ? s.slice(0, MAX_TEXT) + '\n…（历史记录已截断）' : s;
   const runNodes: RunNodeResult[] = nodes.map((n) => ({
     id: n.id,
     label: n.data.label,
@@ -305,8 +328,10 @@ function buildRunRecord(nodes: WBNode[], edges: Edge[]): RunRecord {
     status: n.data.status,
     prompt: n.data.prompt,
     renderedPrompt: n.data.renderedPrompt,
-    output: n.data.output,
-    outputs: n.data.outputs,
+    output: trunc(n.data.output),
+    outputs: Object.fromEntries(
+      Object.entries(n.data.outputs).map(([p, c]) => [p, c ? trunc(c) : c] as [string, string | undefined])
+    ) as Partial<Record<ProviderName, string>>,
     urls: n.data.urls,
     error: n.data.error,
     position: { x: n.position.x, y: n.position.y },

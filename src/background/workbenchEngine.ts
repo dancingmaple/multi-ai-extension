@@ -4,13 +4,70 @@
 // 一次「请求 / 响应」，供 Workbench 前端按节点同步等待结果。
 // ============================================================
 
-import type { ProviderName, WorkbenchExecResult } from '../shared/types';
+import type { AskTaskState, ProviderName, WorkbenchExecResult } from '../shared/types';
 import { DEFAULT_SETTINGS } from '../shared/constants';
 import { handleAskAll } from './messageRouter';
 import { getTask, deleteTask } from './stateStore';
+import { onBroadcast } from '../shared/messaging';
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+/**
+ * 事件驱动等待：订阅 TASK_STATE_UPDATE 广播，当本任务全部 settle 时立即返回
+ * （替代 400ms 轮询，省电且更即时）；同时保留超时兜底。
+ */
+function waitForSettled(
+  taskId: string,
+  providers: ProviderName[],
+  outputs: Partial<Record<ProviderName, string>>,
+  errors: Partial<Record<ProviderName, string>>,
+  deadline: number
+): Promise<void> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      off();
+      resolve();
+    };
+
+    const collect = (task: AskTaskState | undefined) => {
+      if (!task || task.taskId !== taskId) return;
+      let allSettled = true;
+      for (const p of providers) {
+        const st = task.providers[p]?.status;
+        if (st === 'done') {
+          const content = task.providers[p]?.content ?? '';
+          // 关键：done 但内容为空属于「抓取失败/未渲染完」，不能算成功；
+          // 留作未落定，最终记为超时错误，便于用户用「手动获取」补救。
+          if (content.trim().length > 0) {
+            if (outputs[p] === undefined) {
+              outputs[p] = content;
+              console.log('[Workbench:engine]', p, 'done (len=' + content.length + ')');
+            }
+          } else {
+            allSettled = false;
+          }
+        } else if (st === 'error' || st === 'login_required') {
+          if (errors[p] === undefined) {
+            errors[p] = task.providers[p].error || st;
+            console.warn('[Workbench:engine]', p, 'failed:', errors[p]);
+          }
+        } else {
+          allSettled = false;
+        }
+      }
+      if (allSettled) finish();
+    };
+
+    const off = onBroadcast((msg) => {
+      if (msg.type === 'TASK_STATE_UPDATE') collect(msg.task);
+    });
+    // 订阅前先看一次当前状态（可能已全部完成）
+    collect(getTask(taskId));
+    // 超时兜底：超过 deadline 仍未 settle 则强制返回（交由外层记为超时）
+    const timer = setTimeout(finish, Math.max(0, deadline - Date.now()));
+  });
 }
 
 /**
@@ -39,37 +96,8 @@ export async function runWorkbenchExecution(
   const deadline = Date.now() + maxPer + 8000;
   const budgetSec = Math.round((maxPer + 8000) / 1000);
 
-  while (Date.now() < deadline) {
-    const task = getTask(taskId);
-    if (task) {
-      let allSettled = true;
-      for (const p of providers) {
-        const st = task.providers[p]?.status;
-        if (st === 'done') {
-          const content = task.providers[p]?.content ?? '';
-          // 关键：done 但内容为空属于「抓取失败/未渲染完」，不能算成功；
-          // 留作未落定，最终记为超时错误，便于用户用「手动获取」补救。
-          if (content.trim().length > 0) {
-            if (outputs[p] === undefined) {
-              outputs[p] = content;
-              console.log('[Workbench:engine]', p, 'done (len=' + content.length + ')');
-            }
-          } else {
-            allSettled = false;
-          }
-        } else if (st === 'error' || st === 'login_required') {
-          if (errors[p] === undefined) {
-            errors[p] = task.providers[p].error || st;
-            console.warn('[Workbench:engine]', p, 'failed:', errors[p]);
-          }
-        } else {
-          allSettled = false;
-        }
-      }
-      if (allSettled) break;
-    }
-    await sleep(400);
-  }
+  // 事件驱动等待（广播驱动，即时返回；超时兜底走外层错误处理）
+  await waitForSettled(taskId, providers, outputs, errors, deadline);
 
   // 超时仍未落定（仍在 sending/waiting，或 done 但内容为空）的 provider，
   // 记为明确超时错误，便于排查，也提示用户可「手动获取」。
