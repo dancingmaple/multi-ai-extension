@@ -101,6 +101,7 @@ export const NodeShell = memo(function NodeShell({
   const updateNodeData = useWorkflowStore((s) => s.updateNodeData);
   const executeNode = useWorkflowStore((s) => s.executeNode);
   const confirmNode = useWorkflowStore((s) => s.confirmNode);
+  const confirmAndContinue = useWorkflowStore((s) => s.confirmAndContinue);
   const grabNodeAnswers = useWorkflowStore((s) => s.grabNodeAnswers);
   const updateNodeOutput = useWorkflowStore((s) => s.updateNodeOutput);
   const cancelAutoGrab = useWorkflowStore((s) => s.cancelAutoGrab);
@@ -359,6 +360,9 @@ export const NodeShell = memo(function NodeShell({
             {data.autoGrabAt && (
               <span className="wb-delay__count">
                 ⏱ {remainSec}s 后自动获取
+                {typeof data.probeStage === 'number' && (
+                  <span className="wb-delay__probe">（第 {data.probeStage + 1}/3 次探测）</span>
+                )}
                 <button
                   type="button"
                   className="wb-delay__cancel"
@@ -461,13 +465,22 @@ export const NodeShell = memo(function NodeShell({
             </button>
           )}
           {data.status === 'reviewing' && (
-            <button
-              className="wb-actions__btn wb-actions__btn--ok"
-              onClick={() => confirmNode(id)}
-              title="采纳当前结果（状态变为成功）"
-            >
-              ✓ 采纳
-            </button>
+            <>
+              <button
+                className="wb-actions__btn wb-actions__btn--ok"
+                onClick={() => confirmNode(id)}
+                title="采纳当前结果（状态变为成功）"
+              >
+                ✓ 采纳
+              </button>
+              <button
+                className="wb-actions__btn wb-actions__btn--continue"
+                onClick={() => void confirmAndContinue(id)}
+                title="采纳当前结果，并自动运行其下游节点（按拓扑顺序继续）"
+              >
+                ⏭ 采纳并继续
+              </button>
+            </>
           )}
           {data.status === 'error' && (
             <button

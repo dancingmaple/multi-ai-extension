@@ -63,6 +63,8 @@ export interface WorkbenchNodeData {
   grabDelay?: number;
   /** 待触发的自动获取预定时间（时间戳 ms）；用于 UI 显示倒计时与取消；到点后清空 */
   autoGrabAt?: number;
+  /** 阶梯自动探测当前档位（0=首次 15s，1=30s，2=60s）；用于 UI 显示「第 N 次探测」 */
+  probeStage?: number;
 }
 
 export type WBNode = Node<WorkbenchNodeData>;
@@ -417,21 +419,50 @@ function clearAutoGrabTimer(id: string): void {
 const executingNodes = new Set<string>();
 
 /**
- * 调度一次「到点自动获取」：在 delaySec 秒后自动触发该节点的手动获取，
- * 用于挽回自动抓取失败的回答（例如某家 AI 超时 / 未登录）。
- * 到点后清空 autoGrabAt 标记，并调用 grabNodeAnswers。
+ * 阶梯探测间隔（秒）：节点执行完成后若还有缺失回答（自动抓取失败），
+ * 依次按 15s → 30s → 60s 自动「探测获取」，最多 3 档；每档到点调用
+ * grabNodeAnswers 强制刷新，抓齐即停，全档用尽才放弃（UI 可见倒计时可取消）。
  */
-function scheduleAutoGrab(get: () => WorkflowState, id: string, delaySec: number): void {
-  if (!(delaySec > 0)) return;
+const PROBE_INTERVALS_SEC = [15, 30, 60];
+
+/**
+ * 调度一次「阶梯自动探测获取」。
+ * @param stage 第几档（0 起）；stage 0 若节点配置了 grabDelay，则首次延迟用 grabDelay 秒
+ */
+function scheduleProbeGrab(get: () => WorkflowState, id: string, stage: number): void {
+  const node = get().nodes.find((n) => n.id === id);
+  if (!node) return;
+  const { providers, outputs, grabDelay } = node.data;
+  const answered = providers.filter((p) => outputs[p] && outputs[p]!.length > 0).length;
+  // 已抓齐：无需继续探测
+  if (answered >= providers.length) return;
+  // 档位用尽：放弃
+  if (stage >= PROBE_INTERVALS_SEC.length) {
+    get().updateNodeData(id, { autoGrabAt: undefined, probeStage: undefined });
+    return;
+  }
+  // 首次探测：尊重用户配置的 grabDelay（>0 时作为首次延迟）；未配置则用档位间隔
+  const delaySec = stage === 0 && grabDelay && grabDelay > 0 ? grabDelay : PROBE_INTERVALS_SEC[stage];
   clearAutoGrabTimer(id);
   const at = Date.now() + delaySec * 1000;
-  get().updateNodeData(id, { autoGrabAt: at });
+  get().updateNodeData(id, { autoGrabAt: at, probeStage: stage });
   const t = setTimeout(() => {
     autoGrabTimers.delete(id);
     get().updateNodeData(id, { autoGrabAt: undefined });
-    void get().grabNodeAnswers(id);
+    void get()
+      .grabNodeAnswers(id)
+      .then(() => {
+        // 抓完后看是否还缺：缺则进入下一档继续探测
+        scheduleProbeGrab(get, id, stage + 1);
+      });
   }, delaySec * 1000);
   autoGrabTimers.set(id, t);
+}
+
+/** 取消某节点的自动探测（用户点「取消」/ 重新执行时调用） */
+function cancelProbe(get: () => WorkflowState, id: string): void {
+  clearAutoGrabTimer(id);
+  get().updateNodeData(id, { autoGrabAt: undefined, probeStage: undefined });
 }
 
 interface WorkflowState {
@@ -462,9 +493,12 @@ interface WorkflowState {
 
   // ── 引擎 ──
   executeNode: (id: string) => Promise<void>;
-  runDownstream: (id: string) => Promise<void>;
+  /** 从某节点开始运行其下游（默认含自身；「采纳并继续」时 excludeSelf 排除当前节点） */
+  runDownstream: (id: string, opts?: { excludeSelf?: boolean }) => Promise<void>;
   runWorkflow: () => Promise<void>;
   confirmNode: (id: string) => void;
+  /** 采纳当前节点并自动继续运行其下游节点（「采纳并继续」） */
+  confirmAndContinue: (id: string) => Promise<void>;
   /** 手动兜底：重新从各家标签页读屏，挽回自动抓取失败的回答 */
   grabNodeAnswers: (id: string) => Promise<void>;
 
@@ -544,8 +578,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   cancelAutoGrab: (id) => {
-    clearAutoGrabTimer(id);
-    get().updateNodeData(id, { autoGrabAt: undefined });
+    cancelProbe(get, id);
   },
 
   confirmNode: (id) => {
@@ -553,6 +586,12 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     if (node && node.data.status === 'reviewing') {
       get().updateNodeData(id, { status: 'success' });
     }
+  },
+
+  /** 采纳当前节点并自动继续运行其下游节点（「采纳并继续」） */
+  confirmAndContinue: async (id) => {
+    get().confirmNode(id);
+    await get().runDownstream(id, { excludeSelf: true });
   },
 
   grabNodeAnswers: async (id) => {
@@ -609,7 +648,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     if (executingNodes.has(id)) return;
     const node = get().nodes.find((n) => n.id === id);
     if (!node) return;
-    const { nodeType, prompt, providers, grabDelay } = node.data;
+    const { nodeType, prompt, providers } = node.data;
 
     executingNodes.add(id);
 
@@ -677,7 +716,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
           urls: result.urls,
           tabIds: result.tabIds,
         });
-        scheduleAutoGrab(get, id, grabDelay ?? 0);
+        // 执行完成后自动开始阶梯探测：若仍有缺失回答，按 15s→30s→60s 自动补抓
+        scheduleProbeGrab(get, id, 0);
       } else {
         const errMsg = result
           ? Object.values(result.errors).filter(Boolean).join('；') || '执行失败'
@@ -689,7 +729,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
           urls: result?.urls,
           tabIds: result?.tabIds,
         });
-        scheduleAutoGrab(get, id, grabDelay ?? 0);
+        scheduleProbeGrab(get, id, 0);
       }
     } catch (e) {
       get().updateNodeData(id, { status: 'error', error: e instanceof Error ? e.message : String(e) });
@@ -699,17 +739,21 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     }
   },
 
-  runDownstream: async (id) => {
+  runDownstream: async (id, opts?: { excludeSelf?: boolean }) => {
     // 运行前重置：把本次涉及的节点恢复为 idle、清空旧错误/残留自动获取倒计时，
     // 并**清空上一轮运行产物**（outputs/output/urls/tabIds/taskId），
     // 让界面一开始就是干净的，绝不残留上次的结果。
     const order = topoOrder(get().nodes, get().edges);
     const desc = descendants(id, get().edges);
-    const seq = order.filter((n) => desc.has(n.id));
+    // 默认包含起始节点自身（「从此节点开始重跑」）；「采纳并继续」时排除自身
+    const targets = new Set(
+      [...desc].filter((nid) => (opts?.excludeSelf ? nid !== id : true))
+    );
+    const seq = order.filter((n) => targets.has(n.id));
     for (const n of seq) clearAutoGrabTimer(n.id);
     set({
       nodes: get().nodes.map((n) =>
-        desc.has(n.id)
+        targets.has(n.id)
           ? {
               ...n,
               data: {
@@ -717,6 +761,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
                 status: 'idle' as NodeStatus,
                 error: undefined,
                 autoGrabAt: undefined,
+                probeStage: undefined,
                 outputs: {},
                 output: '',
                 urls: undefined,
@@ -750,6 +795,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
           status: 'idle' as NodeStatus,
           error: undefined,
           autoGrabAt: undefined,
+          probeStage: undefined,
           outputs: {},
           output: '',
           urls: undefined,
@@ -778,7 +824,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         // 清除过期的自动获取倒计时标记（定时器不会跨页面加载存活）
         const cleaned = saved.nodes.map((n) => ({
           ...n,
-          data: { ...n.data, autoGrabAt: undefined },
+          data: { ...n.data, autoGrabAt: undefined, probeStage: undefined },
         }));
         set({ nodes: cleaned, edges: saved.edges ?? [] });
         return;
