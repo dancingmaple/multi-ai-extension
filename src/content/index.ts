@@ -5,6 +5,7 @@ import { getProviderFromUrl } from '../shared/providers';
 import { EMBED_MSG } from '../shared/constants';
 import { grabLocal } from './grabLocal';
 import { startPick } from './pickElement';
+import { runDiagnose } from './diagnose';
 
 const currentProvider: ProviderName | null = getProviderFromUrl(location.href);
 
@@ -174,6 +175,21 @@ if (currentProvider) {
           replyTo(src, { __multiAi: EMBED_MSG.PICK_RESULT, role, selector: '' });
         }
       );
+      return;
+    }
+
+    // 页面诊断：父页面请求扫描整页元素，回传结构化信息
+    if (data.__multiAi === EMBED_MSG.DIAGNOSE) {
+      const p = data.provider as ProviderName | undefined;
+      if (p !== provider) return;
+      console.log('[MultiAI:content] DIAGNOSE requested for', p);
+      const result = runDiagnose(p);
+      replyTo(ev.source as Window | null, {
+        __multiAi: EMBED_MSG.DIAGNOSE_RESULT,
+        provider: p,
+        result,
+        url: location.href,
+      });
       return;
     }
   });

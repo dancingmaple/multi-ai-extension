@@ -233,6 +233,55 @@ body,
   color: #e5e9f0;
 }
 
+/* ── 页面诊断面板 ── */
+.tc-diag {
+  border: 1px solid rgba(45, 212, 191, 0.25);
+  border-radius: 9px;
+  overflow: hidden;
+  background: #07140f;
+  margin-top: 2px;
+}
+.tc-diag__head {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #5eead4;
+  background: rgba(45, 212, 191, 0.1);
+  border-bottom: 1px solid rgba(45, 212, 191, 0.18);
+}
+.tc-diag__summary {
+  padding: 5px 10px;
+  font-size: 10px;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+}
+.tc-diag__details {
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+.tc-diag__details > summary {
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #cbd5e1;
+  user-select: none;
+}
+.tc-diag__details > summary:hover {
+  background: rgba(148, 163, 184, 0.06);
+}
+.tc-diag__pre {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 220px;
+  overflow: auto;
+  color: #a5f3fc;
+  background: #050b09;
+}
+
 /* ── 右侧 iframe 预览 ── */
 .tc-preview {
   flex: 1;

@@ -9,7 +9,7 @@ import type { ElementRole } from '../shared/types';
 const OVERLAY_ID = 'multiAI-pick-overlay';
 const LABEL_ID = 'multiAI-pick-label';
 
-function getCssSelector(el: Element): string {
+export function getCssSelector(el: Element): string {
   if (!(el instanceof Element)) return '';
   if (el.id) return '#' + CSS.escape(el.id);
 

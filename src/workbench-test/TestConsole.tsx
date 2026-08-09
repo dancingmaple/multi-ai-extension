@@ -37,6 +37,8 @@ export function TestConsole() {
   // 手动选取元素状态
   const [pickRole, setPickRole] = useState<ElementRole | null>(null);
   const [savedSel, setSavedSel] = useState<ProviderCustomSelectors | null>(null);
+  const [diag, setDiag] = useState<Record<string, unknown> | null>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
 
   // 加载当前 provider 已保存的自定义选择器
   useEffect(() => {
@@ -143,6 +145,32 @@ export function TestConsole() {
       push('info', `已清除「${roleLabel(role)}」自定义选择器`);
     })();
   };
+
+  // 一键诊断：扫描右侧预览页全部元素，回传结构化信息便于排查
+  const runDiagnose = () => {
+    const w = iframeRef.current?.contentWindow;
+    if (!w) {
+      push('err', '预览 iframe 未就绪，无法诊断');
+      return;
+    }
+    setDiagLoading(true);
+    setDiag(null);
+    push('info', '🔬 正在诊断右侧预览页元素…');
+    w.postMessage({ __multiAi: EMBED_MSG.DIAGNOSE, provider }, '*');
+  };
+
+  // 监听诊断结果回传
+  useEffect(() => {
+    const onMsg = (ev: MessageEvent) => {
+      const data = ev.data as Record<string, unknown> | null;
+      if (!data || data.__multiAi !== EMBED_MSG.DIAGNOSE_RESULT) return;
+      setDiagLoading(false);
+      setDiag(data.result as Record<string, unknown>);
+      push('ok', '✅ 诊断完成，已显示在下方面板');
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
 
   // 发起请求：完整走 WORKBENCH_EXECUTE 链路
   const runExecute = async () => {
@@ -259,6 +287,9 @@ export function TestConsole() {
             <button className="tc-btn" disabled={grabbing} onClick={() => void runGrab()}>
               {grabbing ? '获取中…' : '🔍 手动获取'}
             </button>
+            <button className="tc-btn" disabled={diagLoading} onClick={runDiagnose}>
+              {diagLoading ? '诊断中…' : '🔬 诊断页面'}
+            </button>
             <button className="tc-btn tc-btn--ghost" onClick={() => setLogs([])}>
               清空日志
             </button>
@@ -325,6 +356,28 @@ export function TestConsole() {
               <div className="tc-result__head tc-result__head--grab">手动获取（WORKBENCH_GRAB）</div>
               <pre className="tc-result__body">{grabText || '（空）'}</pre>
             </div>
+          </div>
+        )}
+
+        {/* 页面诊断面板 */}
+        {diag && (
+          <div className="tc-diag">
+            <div className="tc-diag__head">页面诊断结果（{PROVIDER_LABELS[provider]}）</div>
+            <div className="tc-diag__summary">
+              输入框候选 {((diag.inputCandidates as unknown[]) || []).length} · 按钮 {(diag.total as Record<string, number>)?.button ?? 0} · URL {(diag.url as string)?.slice(0, 50)}
+            </div>
+            <details className="tc-diag__details" open>
+              <summary>输入框候选（按面积排序，仅可见）</summary>
+              <pre className="tc-diag__pre">{JSON.stringify(diag.inputCandidates, null, 1)}</pre>
+            </details>
+            <details className="tc-diag__details" open>
+              <summary>按钮候选（仅可见）</summary>
+              <pre className="tc-diag__pre">{JSON.stringify(diag.buttonCandidates, null, 1)}</pre>
+            </details>
+            <details className="tc-diag__details">
+              <summary>AI 猜测（输入框 / 发送按钮）</summary>
+              <pre className="tc-diag__pre">{JSON.stringify(diag.guess, null, 1)}</pre>
+            </details>
           </div>
         )}
       </div>

@@ -82,6 +82,9 @@ export const EMBED_MSG = {
   PICK_START: 'multi_ai_pick_start',
   PICK_STOP: 'multi_ai_pick_stop',
   PICK_RESULT: 'multi_ai_pick_result',
+  // 页面诊断：父页面请求 → iframe 内扫描整页元素 → 回传结构化信息（用于排查 UI 变化）
+  DIAGNOSE: 'multi_ai_diagnose',
+  DIAGNOSE_RESULT: 'multi_ai_diagnose_result',
 } as const;
 
 // 自定义元素选择器（手动修复 UI 变化）永久存储键
