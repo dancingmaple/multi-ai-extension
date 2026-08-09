@@ -335,7 +335,14 @@ function sendWorkbenchExecute(
   nodeId: string,
   nodeType: WorkbenchNodeType
 ): Promise<WorkbenchExecResult> {
+  // 超时兜底：background 侧最长等待 ≈ maxPer(120s)+8s 余量；这里给 140s。
+  // 若无超时，background 无响应会让 promise 永不 settle → running 永久 true →
+  // 所有节点按钮 disabled（"点运行无响应"）+ executingNodes 永久残留。
   return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      console.error('[Workbench:store] WORKBENCH_EXECUTE 超时(140s)，未收到 background 响应');
+      reject(new Error('执行超时：background 长时间未响应（可稍后点「手动获取」补救）'));
+    }, 140_000);
     const msg: WorkbenchExecuteMessage = {
       type: 'WORKBENCH_EXECUTE',
       nodeId,
@@ -346,6 +353,7 @@ function sendWorkbenchExecute(
     try {
       console.log('[Workbench:store] 发送 WORKBENCH_EXECUTE', { nodeId, nodeType, providers, promptLen: prompt.length });
       chrome.runtime.sendMessage(msg, (resp: WorkbenchExecResult) => {
+        clearTimeout(timer);
         const lastErr = chrome.runtime.lastError?.message;
         console.log('[Workbench:store] 收到响应', {
           respType: typeof resp,
@@ -360,6 +368,7 @@ function sendWorkbenchExecute(
         }
       });
     } catch (e) {
+      clearTimeout(timer);
       console.error('[Workbench:store] sendMessage throw:', e);
       reject(e instanceof Error ? e : new Error(String(e)));
     }
@@ -375,7 +384,12 @@ function sendWorkbenchGrab(
   tabIds?: Partial<Record<ProviderName, number>>,
   urls?: Partial<Record<ProviderName, string>>
 ): Promise<WorkbenchGrabResult> {
+  // 超时兜底：逐家顺序读屏，45s 足够；避免 background 无响应导致 promise 永不 settle
   return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      console.error('[Workbench:store] WORKBENCH_GRAB 超时(45s)，未收到 background 响应');
+      reject(new Error('手动获取超时：background 长时间未响应'));
+    }, 45_000);
     const msg: WorkbenchGrabMessage = {
       type: 'WORKBENCH_GRAB',
       nodeId,
@@ -387,11 +401,13 @@ function sendWorkbenchGrab(
     };
     try {
       chrome.runtime.sendMessage(msg, (resp: WorkbenchGrabResult) => {
+        clearTimeout(timer);
         const lastErr = chrome.runtime.lastError?.message;
         if (lastErr) reject(new Error(lastErr));
         else resolve(resp);
       });
     } catch (e) {
+      clearTimeout(timer);
       reject(e instanceof Error ? e : new Error(String(e)));
     }
   });
