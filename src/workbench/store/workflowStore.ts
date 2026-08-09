@@ -563,10 +563,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     if (providers.length === 0) return;
     const sendPrompt = renderedPrompt || prompt;
 
+    // 手动获取是「用户主动要最新内容」：抓取成功的项强制覆盖旧值，
+    // 避免界面一直显示上一次的结果；抓不到的家才保留旧值并记错误。
     get().updateNodeData(id, { error: undefined });
     try {
       const result = await sendWorkbenchGrab(sendPrompt, providers, id, taskId, prevTabIds, prevUrls);
-      // 合并：只补全「缺失」项，不覆盖用户已编辑过的内容（防止手动获取把改好的文本冲掉）
       const merged: Partial<Record<ProviderName, string>> = { ...(prevOutputs as Record<ProviderName, string>) };
       const errs: Partial<Record<ProviderName, string>> = {};
       const urls: Partial<Record<ProviderName, string>> = { ...(prevUrls as Record<ProviderName, string>) };
@@ -574,8 +575,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       for (const p of providers) {
         const txt = result.outputs[p];
         if (txt && txt.length > 0) {
-          // 已有非空回答（可能是用户编辑过的）则保留，仅缺失时补全
-          if (!merged[p] || merged[p]!.length === 0) merged[p] = txt;
+          // 手动获取 = 强制刷新：抓到的新内容直接覆盖旧内容
+          merged[p] = txt;
         } else if (result.errors[p]) {
           errs[p] = result.errors[p];
         }
@@ -699,15 +700,31 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   runDownstream: async (id) => {
-    // 运行前重置：把本次涉及的节点恢复为 idle、清空旧错误与残留的自动获取倒计时，
-    // 避免「上次失败还挂着红色状态 / 上一轮的自动获取到点后又来抓一次」。
+    // 运行前重置：把本次涉及的节点恢复为 idle、清空旧错误/残留自动获取倒计时，
+    // 并**清空上一轮运行产物**（outputs/output/urls/tabIds/taskId），
+    // 让界面一开始就是干净的，绝不残留上次的结果。
     const order = topoOrder(get().nodes, get().edges);
     const desc = descendants(id, get().edges);
     const seq = order.filter((n) => desc.has(n.id));
     for (const n of seq) clearAutoGrabTimer(n.id);
     set({
       nodes: get().nodes.map((n) =>
-        desc.has(n.id) ? { ...n, data: { ...n.data, status: 'idle' as NodeStatus, error: undefined, autoGrabAt: undefined } } : n
+        desc.has(n.id)
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                status: 'idle' as NodeStatus,
+                error: undefined,
+                autoGrabAt: undefined,
+                outputs: {},
+                output: '',
+                urls: undefined,
+                tabIds: undefined,
+                taskId: undefined,
+              },
+            }
+          : n
       ),
     });
     set({ running: true });
@@ -722,12 +739,23 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   runWorkflow: async () => {
-    // 运行前重置全部节点：清除旧状态/错误/残留自动获取定时器，保证本次运行干净无残留
+    // 运行前重置全部节点：清除旧状态/错误/残留自动获取定时器，并**清空上一轮运行产物**，
+    // 保证本次运行一开始界面就是干净的（不显示上一轮的任何结果）。
     for (const n of get().nodes) clearAutoGrabTimer(n.id);
     set({
       nodes: get().nodes.map((n) => ({
         ...n,
-        data: { ...n.data, status: 'idle' as NodeStatus, error: undefined, autoGrabAt: undefined },
+        data: {
+          ...n.data,
+          status: 'idle' as NodeStatus,
+          error: undefined,
+          autoGrabAt: undefined,
+          outputs: {},
+          output: '',
+          urls: undefined,
+          tabIds: undefined,
+          taskId: undefined,
+        },
       })),
     });
     const order = topoOrder(get().nodes, get().edges);
