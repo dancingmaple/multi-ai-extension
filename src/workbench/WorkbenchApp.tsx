@@ -2,11 +2,12 @@
 // workbench/WorkbenchApp.tsx
 // 工作台主界面：ReactFlow DAG 画布 + 顶部工具栏（新增节点 / 运行 / 重置）。
 // ============================================================
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ReactFlow, {
   Background,
   Controls,
   MiniMap,
+  useReactFlow,
   type NodeTypes,
 } from 'reactflow';
 import { useWorkflowStore } from './store/workflowStore';
@@ -63,10 +64,55 @@ export function WorkbenchApp() {
   const runCount = useWorkflowStore((s) => s.runHistory.length);
   const dockOpen = useWorkflowStore((s) => s.dockOpen);
   const toggleDock = useWorkflowStore((s) => s.toggleDock);
+  const addNodeAt = useWorkflowStore((s) => s.addNodeAt);
+
+  const { screenToFlowPosition } = useReactFlow();
+  // 右键菜单：记录菜单出现位置（画布坐标），菜单消失置空
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const paneClickAt = useRef(0);
+
+  // 快捷键：Ctrl/Cmd+Enter 运行整个工作流
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        if (!running) void runWorkflow();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [running, runWorkflow]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // 双击画布空白：在该位置新建「汇总」节点（最常见的中间节点）
+  const onPaneClick = () => {
+    const now = Date.now();
+    if (now - paneClickAt.current < 300) {
+      // 第二次点击（双击）：在画布中心附近新建节点
+      const center = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 3 });
+      addNodeAt('summarize', center);
+      paneClickAt.current = 0;
+    } else {
+      paneClickAt.current = now;
+    }
+  };
+
+  // 右键画布空白：弹出「添加节点」快捷菜单
+  const onPaneContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setCtxMenu({ x: e.clientX, y: e.clientY });
+  };
+
+  const ctxAdd = (type: WorkbenchNodeType) => {
+    if (ctxMenu) {
+      const pos = screenToFlowPosition({ x: ctxMenu.x, y: ctxMenu.y });
+      addNodeAt(type, pos);
+    }
+    setCtxMenu(null);
+  };
 
   return (
     <div className="wb-app">
@@ -169,6 +215,8 @@ export function WorkbenchApp() {
           fitView
           proOptions={{ hideAttribution: true }}
           defaultEdgeOptions={{ animated: true }}
+          onPaneClick={onPaneClick}
+          onPaneContextMenu={onPaneContextMenu}
         >
           <Background color="#1e293b" gap={18} size={1.5} />
           <Controls
@@ -195,13 +243,37 @@ export function WorkbenchApp() {
             }}
           />
         </ReactFlow>
+
+        {/* 画布右键菜单：快捷添加节点 */}
+        {ctxMenu && (
+          <div
+            className="wb-ctxmenu"
+            style={{ left: ctxMenu.x, top: ctxMenu.y }}
+            onMouseLeave={() => setCtxMenu(null)}
+            onContextMenu={(e) => e.preventDefault()}
+          >
+            <div className="wb-ctxmenu__title">添加节点</div>
+            {ADD_BUTTONS.map((b) => (
+              <button
+                key={b.type}
+                type="button"
+                className="wb-ctxmenu__item"
+                onClick={() => ctxAdd(b.type)}
+              >
+                <b.Icon size={13} />
+                <span>{b.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* 底部状态栏 */}
       <footer className="wb-statusbar">
         <span>
           提示：给节点设置「变量名」后，下游可用 <code>{'{{变量名}}'}</code> 引用其输出（变量名优先于{' '}
-          <code>{'{{节点id.output}}'}</code>）。每个节点独立新会话运行；「会话」面板可停靠各节点会话，聚焦/打开。
+          <code>{'{{节点id.output}}'}</code>）。画布空白处双击新建「汇总」节点、右键打开快捷菜单；{' '}
+          <code>Ctrl+Enter</code> 运行整个工作流。
         </span>
         <span className="wb-statusbar__providers">
           {ALL_PROVIDERS.map((p) => PROVIDER_LABELS[p]).join(' / ')}

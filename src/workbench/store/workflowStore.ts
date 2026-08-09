@@ -512,6 +512,8 @@ interface WorkflowState {
   onEdgesChange: (changes: EdgeChange[]) => void;
   onConnect: (conn: Connection) => void;
   addNode: (nodeType: WorkbenchNodeType) => void;
+  /** 在指定画布坐标新增节点（右键菜单/双击空白处用） */
+  addNodeAt: (nodeType: WorkbenchNodeType, position: { x: number; y: number }) => void;
   updateNodeData: (id: string, patch: Partial<WorkbenchNodeData>) => void;
   /** 直接编辑某家 AI 的回答文本（节点结果可编辑），并重新聚合 output */
   updateNodeOutput: (id: string, provider: ProviderName, text: string) => void;
@@ -580,7 +582,10 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     const count = get().nodes.length;
     const col = count % 3;
     const row = Math.floor(count / 3) % 4;
-    const node = makeNode(nodeType, { x: 200 + col * 120, y: 120 + row * 100 });
+    get().addNodeAt(nodeType, { x: 200 + col * 120, y: 120 + row * 100 });
+  },
+  addNodeAt: (nodeType, position) => {
+    const node = makeNode(nodeType, position);
     set({ nodes: [...get().nodes, node] });
     scheduleSave(get);
   },

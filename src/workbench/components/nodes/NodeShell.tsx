@@ -117,6 +117,7 @@ export const NodeShell = memo(function NodeShell({
   const executeNode = useWorkflowStore((s) => s.executeNode);
   const confirmNode = useWorkflowStore((s) => s.confirmNode);
   const confirmAndContinue = useWorkflowStore((s) => s.confirmAndContinue);
+  const runDownstream = useWorkflowStore((s) => s.runDownstream);
   const grabNodeAnswers = useWorkflowStore((s) => s.grabNodeAnswers);
   const updateNodeOutput = useWorkflowStore((s) => s.updateNodeOutput);
   const cancelAutoGrab = useWorkflowStore((s) => s.cancelAutoGrab);
@@ -128,6 +129,8 @@ export const NodeShell = memo(function NodeShell({
   const [grabbing, setGrabbing] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [refOpen, setRefOpen] = useState(false);
+  // 输出区折叠态（默认折叠，画布更清爽；点「展开」看全部内容）
+  const [outputOpen, setOutputOpen] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement>(null);
 
   // ── 本地草稿：提示词 / 变量名（输入时只改本地，避免光标被重渲染重置） ──
@@ -400,6 +403,24 @@ export const NodeShell = memo(function NodeShell({
 
         {(data.output || data.error) && (
           <div className="wb-output nowheel">
+            {/* 折叠头：摘要 + 展开/收起 */}
+            <button
+              type="button"
+              className="wb-output__toggle nodrag"
+              onClick={() => setOutputOpen((v) => !v)}
+              title={outputOpen ? '收起输出' : '展开输出'}
+            >
+              <span className="wb-output__toggle-arrow" aria-hidden>{outputOpen ? '▾' : '▸'}</span>
+              <span className="wb-output__toggle-summary">
+                {data.error && data.status === 'error'
+                  ? `执行失败：${(data.error || '').slice(0, 40)}`
+                  : (data.output || '').split('\n').find((l) => l.trim())?.slice(0, 46) || '有输出'}
+              </span>
+              <span className="wb-output__toggle-ctrl">{outputOpen ? '收起' : '展开'}</span>
+            </button>
+
+            {outputOpen && (
+              <>
             {showProviders && data.providers.length > 0 && (
               <div className="wb-output__meta">
                 <CheckIcon size={11} />
@@ -467,6 +488,8 @@ export const NodeShell = memo(function NodeShell({
                 </div>
               );
             })()}
+              </>
+            )}
           </div>
         )}
 
@@ -474,11 +497,11 @@ export const NodeShell = memo(function NodeShell({
           <button
             className="wb-actions__btn wb-actions__btn--run"
             disabled={running}
-            onClick={() => void executeNode(id)}
-            title="仅运行当前节点"
+            onClick={() => void runDownstream(id)}
+            title="运行本节点，并自动按拓扑顺序继续其下游（无需手动逐个点）"
           >
             {running ? <StopIcon size={12} /> : <PlayIcon size={12} />}
-            {running ? '运行中…' : '运行'}
+            {running ? '运行中…' : '运行并继续'}
           </button>
           {canGrab && (
             <button

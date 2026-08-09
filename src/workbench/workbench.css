@@ -695,21 +695,59 @@ textarea.wb-input {
 /* ── 输出区 ─────────────────────────────────────── */
 .wb-output {
   margin-top: 9px;
-  max-height: 240px;
-  overflow: auto;
-  white-space: pre-wrap;
   background: #0b1222;
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 9px;
-  padding: 8px 10px;
+  padding: 6px 10px;
   font-size: 11px;
   line-height: 1.55;
+}
+/* 展开后的内容区：滚动上限 */
+.wb-output > :not(.wb-output__toggle) {
+  max-height: 240px;
+  overflow: auto;
+}
+/* 折叠头：摘要行 */
+.wb-output__toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: #a9b6cc;
+  padding: 2px 0;
+  cursor: pointer;
+  text-align: left;
+  font-size: 11px;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.wb-output__toggle:hover {
+  color: #e5e9f0;
+}
+.wb-output__toggle-arrow {
+  flex-shrink: 0;
+  color: #64748b;
+  font-size: 10px;
+}
+.wb-output__toggle-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wb-output__toggle-ctrl {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: #38bdf8;
+  font-weight: 600;
 }
 .wb-output__meta {
   font-size: 11px;
   font-weight: 600;
   color: #34d399;
-  margin-bottom: 6px;
+  margin: 6px 0;
 }
 .wb-output__missing {
   color: #fbbf24;
@@ -1154,6 +1192,49 @@ textarea.wb-input {
   overflow: auto;
   max-height: 56vh;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* ── 画布右键菜单 ─────────────────────────────── */
+.wb-ctxmenu {
+  position: absolute;
+  z-index: 60;
+  min-width: 150px;
+  background: #101a2e;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 9px;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: 0 14px 36px rgba(2, 6, 18, 0.6);
+}
+.wb-ctxmenu__title {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #7d8aa0;
+  padding: 3px 8px 5px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  margin-bottom: 3px;
+}
+.wb-ctxmenu__item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  border: none;
+  color: #e5e9f0;
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.wb-ctxmenu__item:hover {
+  background: rgba(56, 189, 248, 0.1);
+}
+.wb-ctxmenu__item svg {
+  width: 13px;
+  height: 13px;
 }
 
 /* ── 会话坞 ─────────────────────────────────────── */
