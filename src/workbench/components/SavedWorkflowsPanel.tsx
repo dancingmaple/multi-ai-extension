@@ -4,6 +4,7 @@
 // ============================================================
 import { useEffect, useState } from 'react';
 import { useWorkflowStore } from '../store/workflowStore';
+import { SaveIcon, CloseIcon } from './icons';
 
 export function SavedWorkflowsPanel() {
   const saved = useWorkflowStore((s) => s.savedWorkflows);
@@ -45,9 +46,9 @@ export function SavedWorkflowsPanel() {
     <div className="wb-overlay" onClick={closePanel}>
       <div className="wb-modal wb-modal--wide" onClick={(e) => e.stopPropagation()}>
         <div className="wb-modal__head">
-          <span>💾 我的工作流（可复用）</span>
-          <button className="wb-modal__close" onClick={closePanel}>
-            ✕
+          <span><SaveIcon size={16} />我的工作流</span>
+          <button className="wb-modal__close" onClick={closePanel} title="关闭">
+            <CloseIcon size={13} />
           </button>
         </div>
 

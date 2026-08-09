@@ -10,6 +10,20 @@ import { useWorkflowStore } from '../../store/workflowStore';
 import { ALL_PROVIDERS, PROVIDER_LABELS } from '@shared/constants';
 import { isValidVarName } from '../../utils/template';
 import type { ProviderName } from '@shared/types';
+import {
+  SparkIcon,
+  TerminalIcon,
+  GearIcon,
+  ArrowRightIcon,
+  PlayIcon,
+  StopIcon,
+  RefreshIcon,
+  CheckIcon,
+  ArrowClockIcon,
+  CopyIcon,
+  LinkIcon,
+  PlusIcon,
+} from '../icons';
 
 const STATUS_LABEL: Record<string, string> = {
   idle: '空闲',
@@ -19,14 +33,14 @@ const STATUS_LABEL: Record<string, string> = {
   error: '失败',
 };
 
-const ACCENT_ICON: Record<Accent, string> = {
-  start: '🌱',
-  summarize: '📊',
-  process: '⚙️',
-  end: '🏁',
-};
-
 export type Accent = 'start' | 'summarize' | 'process' | 'end';
+
+const ACCENT_ICON: Record<Accent, (p: { size?: number }) => React.ReactNode> = {
+  start: SparkIcon,
+  summarize: TerminalIcon,
+  process: GearIcon,
+  end: ArrowRightIcon,
+};
 
 interface Props {
   id: string;
@@ -67,6 +81,7 @@ const EditableAnswer = memo(function EditableAnswer({
       <div className="wb-answer__head">
         <span className="wb-answer__name">{label}</span>
         <button type="button" className="wb-copy" onClick={onCopy}>
+          {copied ? <CheckIcon size={11} /> : <CopyIcon size={11} />}
           {copied ? '已复制' : '复制'}
         </button>
       </div>
@@ -218,7 +233,12 @@ export const NodeShell = memo(function NodeShell({
       {showTarget && <Handle type="target" position={Position.Left} />}
 
       <div className="wb-node__header">
-        <span className="wb-node__icon" aria-hidden>{ACCENT_ICON[accent]}</span>
+        {(() => {
+          const NodeIcon = ACCENT_ICON[accent];
+          return (
+            <span className="wb-node__icon" aria-hidden><NodeIcon size={12} /></span>
+          );
+        })()}
         <span className="truncate">{data.label}</span>
         <span className={`wb-node__status wb-node__status--${data.status}`}>
           <span className="wb-node__dot" aria-hidden />
@@ -247,7 +267,7 @@ export const NodeShell = memo(function NodeShell({
             }}
           />
           {varNameDraft && !isValidVarName(varNameDraft) && (
-            <div className="wb-varname__warn">⚠ 变量名需以字母/中文开头，仅含字母数字下划线</div>
+            <div className="wb-varname__warn">! 变量名需以字母/中文开头，仅含字母数字下划线</div>
           )}
           {varNameDraft && isValidVarName(varNameDraft) && (
             <div className="wb-varname__hint">下游可用 <code>{`{{${varNameDraft}}}`}</code> 引用</div>
@@ -280,7 +300,8 @@ export const NodeShell = memo(function NodeShell({
                   title="引用其它节点的输出到当前光标"
                   onClick={() => setRefOpen((v) => !v)}
                 >
-                  ＋ 引用上游
+                  <PlusIcon size={11} />
+                  引用上游
                 </button>
                 {refOpen && (
                   <div className="wb-ref__menu">
@@ -359,7 +380,8 @@ export const NodeShell = memo(function NodeShell({
             />
             {data.autoGrabAt && (
               <span className="wb-delay__count">
-                ⏱ {remainSec}s 后自动获取
+                <ArrowClockIcon size={11} />
+                {remainSec}s 后自动获取
                 {typeof data.probeStage === 'number' && (
                   <span className="wb-delay__probe">（第 {data.probeStage + 1}/3 次探测）</span>
                 )}
@@ -380,16 +402,17 @@ export const NodeShell = memo(function NodeShell({
           <div className="wb-output nowheel">
             {showProviders && data.providers.length > 0 && (
               <div className="wb-output__meta">
-                ✅ {answeredCount}/{data.providers.length} 已回答
+                <CheckIcon size={11} />
+                {answeredCount}/{data.providers.length} 已回答
                 {missingCount > 0 && (
                   <span className="wb-output__missing">（{missingCount} 个未取到，可手动获取）</span>
                 )}
               </div>
             )}
             {data.error && data.status === 'error' ? (
-              <div className="wb-output__err" title={data.error}>❌ {data.error.length > 80 ? data.error.slice(0, 77) + '…' : data.error}</div>
+              <div className="wb-output__err" title={data.error}>✕ {data.error.length > 80 ? data.error.slice(0, 77) + '…' : data.error}</div>
             ) : data.error ? (
-              <div className="wb-output__warn" title={data.error}>⚠ 部分失败：{data.error.length > 60 ? data.error.slice(0, 57) + '…' : data.error}</div>
+              <div className="wb-output__warn" title={data.error}>△ 部分失败：{data.error.length > 60 ? data.error.slice(0, 57) + '…' : data.error}</div>
             ) : null}
 
             {/* 逐家回答：可编辑 + 可复制（本地草稿输入，光标不受重渲染影响） */}
@@ -417,6 +440,7 @@ export const NodeShell = memo(function NodeShell({
                   className="wb-copy wb-copy--all"
                   onClick={() => void copyText(data.output, 'all')}
                 >
+                  {copied === 'all' ? <CheckIcon size={11} /> : <CopyIcon size={11} />}
                   {copied === 'all' ? '已复制' : '复制全部'}
                 </button>
               </div>
@@ -436,7 +460,8 @@ export const NodeShell = memo(function NodeShell({
                       title={data.urls?.[p]}
                       onClick={() => openUrl(data.urls?.[p])}
                     >
-                      🔗 {PROVIDER_LABELS[p]}
+                      <LinkIcon size={11} />
+                      {PROVIDER_LABELS[p]}
                     </button>
                   ))}
                 </div>
@@ -452,7 +477,8 @@ export const NodeShell = memo(function NodeShell({
             onClick={() => void executeNode(id)}
             title="仅运行当前节点"
           >
-            {running ? '运行中…' : '▶ 运行'}
+            {running ? <StopIcon size={12} /> : <PlayIcon size={12} />}
+            {running ? '运行中…' : '运行'}
           </button>
           {canGrab && (
             <button
@@ -461,6 +487,7 @@ export const NodeShell = memo(function NodeShell({
               onClick={() => void onGrab()}
               title="自动抓取可能漏掉回答：从各家标签页重新读屏补全"
             >
+              <RefreshIcon size={12} />
               {grabbing ? '获取中…' : missingCount > 0 ? '手动获取' : '重新获取'}
             </button>
           )}
@@ -471,14 +498,16 @@ export const NodeShell = memo(function NodeShell({
                 onClick={() => confirmNode(id)}
                 title="采纳当前结果（状态变为成功）"
               >
-                ✓ 采纳
+                <CheckIcon size={12} />
+                采纳
               </button>
               <button
                 className="wb-actions__btn wb-actions__btn--continue"
                 onClick={() => void confirmAndContinue(id)}
                 title="采纳当前结果，并自动运行其下游节点（按拓扑顺序继续）"
               >
-                ⏭ 采纳并继续
+                <ArrowClockIcon size={12} />
+                采纳并继续
               </button>
             </>
           )}
@@ -487,7 +516,8 @@ export const NodeShell = memo(function NodeShell({
               className="wb-actions__btn wb-actions__btn--retry"
               onClick={() => void executeNode(id)}
             >
-              ↻ 重试
+              <RefreshIcon size={12} />
+              重试
             </button>
           )}
         </div>

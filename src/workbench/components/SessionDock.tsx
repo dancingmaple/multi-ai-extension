@@ -14,6 +14,7 @@ import { useWorkflowStore } from '../store/workflowStore';
 import { PROVIDER_LABELS } from '@shared/constants';
 import type { ProviderName } from '@shared/types';
 import type { WorkbenchNodeData } from '../store/workflowStore';
+import { PanelIcon, CloseIcon, PlayIcon, LinkIcon, EyeIcon, EyeSlashIcon } from './icons';
 
 /** 把对应 AI 的浏览器标签页切到前台 */
 async function focusTab(tabId?: number): Promise<void> {
@@ -94,6 +95,7 @@ function NodeSessions({ data }: { data: WorkbenchNodeData }): JSX.Element {
                       onClick={() => void focusTab(tabId)}
                       disabled={tabId === undefined}
                     >
+                      <PlayIcon size={11} />
                       聚焦
                     </button>
                     <button
@@ -102,6 +104,7 @@ function NodeSessions({ data }: { data: WorkbenchNodeData }): JSX.Element {
                       title="新标签打开会话（取实时地址）"
                       onClick={() => void openLiveUrl(tabId, url)}
                     >
+                      <LinkIcon size={11} />
                       打开
                     </button>
                     <button
@@ -110,6 +113,7 @@ function NodeSessions({ data }: { data: WorkbenchNodeData }): JSX.Element {
                       title="内嵌预览（部分站点禁止内嵌）"
                       onClick={() => setPreview((cur) => (cur === p ? null : p))}
                     >
+                      {preview === p ? <EyeSlashIcon size={11} /> : <EyeIcon size={11} />}
                       {preview === p ? '收起' : '预览'}
                     </button>
                   </span>
@@ -155,9 +159,9 @@ export function SessionDock(): JSX.Element {
   return (
     <aside className="wb-dock">
       <div className="wb-dock__header">
-        <span>🖥 会话坞（按节点分组）</span>
+        <span><PanelIcon size={15} />会话坞</span>
         <button type="button" className="wb-dock__close" onClick={toggleDock} title="收起">
-          ✕
+          <CloseIcon size={13} />
         </button>
       </div>
       <div className="wb-dock__body">

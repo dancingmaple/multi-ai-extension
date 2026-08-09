@@ -1,5 +1,5 @@
 // ============================================================
-// workbench/main.tsx — 工作台独立全屏页入口
+// workbench/main.tsx - 工作台独立全屏页入口
 // ============================================================
 import React from 'react';
 import ReactDOM from 'react-dom/client';

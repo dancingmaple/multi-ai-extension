@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useWorkflowStore } from '../store/workflowStore';
 import { buildRunMarkdown, runStatusLabel } from '../utils/export';
+import { HistoryIcon, CloseIcon, CopyIcon, DownloadIcon, CheckIcon, ArrowLeftIcon } from './icons';
 
 export function RunHistoryPanel() {
   const history = useWorkflowStore((s) => s.runHistory);
@@ -47,9 +48,9 @@ export function RunHistoryPanel() {
     <div className="wb-overlay" onClick={detailId ? () => setDetailId(null) : closePanel}>
       <div className="wb-modal wb-modal--wide" onClick={(e) => e.stopPropagation()}>
         <div className="wb-modal__head">
-          <span>📜 运行历史</span>
-          <button className="wb-modal__close" onClick={closePanel}>
-            ✕
+          <span><HistoryIcon size={16} />运行历史</span>
+          <button className="wb-modal__close" onClick={closePanel} title="关闭">
+            <CloseIcon size={13} />
           </button>
         </div>
 
@@ -58,17 +59,20 @@ export function RunHistoryPanel() {
             <div className="wb-detail">
               <div className="wb-detail__bar">
                 <button className="wb-btn wb-btn--sm" onClick={() => setDetailId(null)}>
-                  ← 返回列表
+                  <ArrowLeftIcon size={12} />
+                  返回列表
                 </button>
                 <div className="wb-detail__title">{detail.name}</div>
                 <div className="wb-detail__acts">
                   <button className="wb-btn wb-btn--sm" onClick={() => void copyMd()}>
-                    {copied ? '已复制 ✓' : '复制 MD'}
+                    {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                    {copied ? '已复制' : '复制 MD'}
                   </button>
                   <button
                     className="wb-btn wb-btn--sm wb-btn--primary"
                     onClick={() => exportRun(detail.id)}
                   >
+                    <DownloadIcon size={12} />
                     下载 .md
                   </button>
                 </div>
@@ -76,7 +80,7 @@ export function RunHistoryPanel() {
               <pre className="wb-detail__md">{md}</pre>
             </div>
           ) : history.length === 0 ? (
-            <div className="wb-empty">暂无运行记录。点「▶ 运行工作流」后，每次运行的完整过程与结果都会自动归档在这里。</div>
+            <div className="wb-empty">暂无运行记录。点「运行工作流」后，每次运行的完整过程与结果都会自动归档在这里。</div>
           ) : (
             <ul className="wb-list">
               {history.map((r) => (
