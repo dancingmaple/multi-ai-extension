@@ -14,6 +14,15 @@ console.log('[MultiAI:content] Content script loaded on', location.hostname, 'pr
 // 记录当前任务 id，用于把网页地址变化回传给 background（网页视图定位原网页）
 let currentEmbedTaskId: string | undefined;
 
+// 向父页面（iframe 嵌入视图的宿主）postMessage 回传数据
+function replyTo(target: Window | null, payload: Record<string, unknown>): void {
+  try {
+    (target ?? window.parent ?? window).postMessage(payload, '*');
+  } catch {
+    /* 父页面可能已关闭 */
+  }
+}
+
 function reportUrl(): void {
   if (!currentEmbedTaskId || !currentProvider) return;
   const url = location.href;
@@ -45,43 +54,62 @@ function reportUrl(): void {
   reportUrl();
 })();
 
-function runExecute(msg: ExecutePromptMessage): void {
+function runExecute(msg: ExecutePromptMessage, replyTarget?: Window | null): void {
   const execMsg = msg;
   currentEmbedTaskId = execMsg.taskId;
+  // replyTarget 存在 → 通过 postMessage 回传父页面（嵌入视图执行模式）；
+  // 否则 → 通过 chrome.runtime 回传 background（常规标签页执行模式）。
+  const embed = !!replyTarget;
   const sendStatus = (status: string, detail?: string) => {
-    chrome.runtime.sendMessage({
-      type: 'PROVIDER_STATUS',
-      taskId: execMsg.taskId,
-      provider: execMsg.provider,
-      status,
-      detail,
-    });
+    if (embed && replyTarget) {
+      replyTo(replyTarget, { __multiAi: EMBED_MSG.EXECUTE_STATUS, provider: execMsg.provider, status, detail });
+    } else {
+      chrome.runtime.sendMessage({
+        type: 'PROVIDER_STATUS',
+        taskId: execMsg.taskId,
+        provider: execMsg.provider,
+        status,
+        detail,
+      });
+    }
   };
   const sendStream = (content: string) => {
-    chrome.runtime.sendMessage({
-      type: 'STREAM_UPDATE',
-      taskId: execMsg.taskId,
-      provider: execMsg.provider,
-      content,
-      isPartial: true,
-    });
+    if (embed && replyTarget) {
+      replyTo(replyTarget, { __multiAi: EMBED_MSG.EXECUTE_STREAM, provider: execMsg.provider, content });
+    } else {
+      chrome.runtime.sendMessage({
+        type: 'STREAM_UPDATE',
+        taskId: execMsg.taskId,
+        provider: execMsg.provider,
+        content,
+        isPartial: true,
+      });
+    }
   };
   const sendDone = (finalContent: string) => {
-    chrome.runtime.sendMessage({
-      type: 'TASK_DONE',
-      taskId: execMsg.taskId,
-      provider: execMsg.provider,
-      finalContent,
-    });
+    if (embed && replyTarget) {
+      replyTo(replyTarget, { __multiAi: EMBED_MSG.EXECUTE_DONE, provider: execMsg.provider, finalContent });
+    } else {
+      chrome.runtime.sendMessage({
+        type: 'TASK_DONE',
+        taskId: execMsg.taskId,
+        provider: execMsg.provider,
+        finalContent,
+      });
+    }
   };
   const sendError = (errorCode: string, errorMessage: string) => {
-    chrome.runtime.sendMessage({
-      type: 'TASK_ERROR',
-      taskId: execMsg.taskId,
-      provider: execMsg.provider,
-      errorCode,
-      errorMessage,
-    });
+    if (embed && replyTarget) {
+      replyTo(replyTarget, { __multiAi: EMBED_MSG.EXECUTE_ERROR, provider: execMsg.provider, errorCode, errorMessage });
+    } else {
+      chrome.runtime.sendMessage({
+        type: 'TASK_ERROR',
+        taskId: execMsg.taskId,
+        provider: execMsg.provider,
+        errorCode,
+        errorMessage,
+      });
+    }
   };
 
   executePrompt(execMsg, sendStatus, sendStream, sendDone, sendError);
@@ -90,7 +118,7 @@ function runExecute(msg: ExecutePromptMessage): void {
 onBackgroundMessage((msg, _sender) => {
   if (msg.type === 'EXECUTE_PROMPT') {
     console.log('[MultiAI:content] Received EXECUTE_PROMPT for', msg.provider);
-    runExecute(msg as ExecutePromptMessage);
+    runExecute(msg as ExecutePromptMessage, null);
   }
 
   // PING: respond directly by returning a value
@@ -104,14 +132,6 @@ onBackgroundMessage((msg, _sender) => {
 // 把任务下发给 iframe 内的 content script。跨域 postMessage 不受同源策略限制。 ──
 if (currentProvider) {
   const provider = currentProvider;
-
-  const replyTo = (target: Window | null, payload: Record<string, unknown>) => {
-    try {
-      (target ?? window.parent ?? window).postMessage(payload, '*');
-    } catch {
-      /* 父页面可能已关闭 */
-    }
-  };
 
   window.addEventListener('message', (ev: MessageEvent) => {
     const data = ev.data as Record<string, unknown> | null;
@@ -127,8 +147,9 @@ if (currentProvider) {
       const prompt = data.prompt as string | undefined;
       const taskId = data.taskId as string | undefined;
       if (p === provider && prompt && taskId) {
-        console.log('[MultiAI:content] postMessage EXECUTE for', p);
-        runExecute({ type: 'EXECUTE_PROMPT', taskId, provider: p, prompt });
+        console.log('[MultiAI:content] postMessage EXECUTE for', p, 'taskId=', taskId);
+        // 通过 postMessage 把结果回传给父页面（测试台可见的 iframe 内执行）
+        runExecute({ type: 'EXECUTE_PROMPT', taskId, provider: p, prompt }, ev.source as Window | null);
       }
       return;
     }

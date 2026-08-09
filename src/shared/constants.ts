@@ -85,6 +85,11 @@ export const EMBED_MSG = {
   // 页面诊断：父页面请求 → iframe 内扫描整页元素 → 回传结构化信息（用于排查 UI 变化）
   DIAGNOSE: 'multi_ai_diagnose',
   DIAGNOSE_RESULT: 'multi_ai_diagnose_result',
+  // 嵌入视图执行结果回传：iframe 内执行 EXECUTE 后，把状态/流式/完成/错误回传父页面
+  EXECUTE_STATUS: 'multi_ai_execute_status',
+  EXECUTE_STREAM: 'multi_ai_execute_stream',
+  EXECUTE_DONE: 'multi_ai_execute_done',
+  EXECUTE_ERROR: 'multi_ai_execute_error',
 } as const;
 
 // 自定义元素选择器（手动修复 UI 变化）永久存储键

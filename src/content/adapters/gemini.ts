@@ -269,7 +269,20 @@ export class GeminiAdapter extends BaseAdapter {
       await sleep(200);
     }
 
-    const btn = this.findSubmitBtn(input);
+    // NEW Gemini: the send button is NOT present in zero-state — it only appears
+    // AFTER text is typed into the input. Poll for up to 5s for it to show up.
+    let btn: HTMLButtonElement | null = null;
+    const waitStart = Date.now();
+    while (Date.now() - waitStart < 5000) {
+      btn = this.findSubmitBtn(input);
+      if (btn) break;
+      await sleep(300);
+    }
+    if (!btn) {
+      console.warn('[Gemini:adapter] submit: no send button appeared within 5s (zero-state?). Retrying find once...');
+      btn = this.findSubmitBtn(input);
+    }
+
 
     if (btn) {
       this.clickButton(btn);
@@ -336,26 +349,52 @@ export class GeminiAdapter extends BaseAdapter {
       console.warn('  btn[' + i + ']: aria-label="' + b.getAttribute('aria-label') + '", title="' + b.getAttribute('title') + '", disabled=' + b.disabled + ', text="' + (b.textContent || '').trim().slice(0, 20) + '", cls=' + String(b.className).slice(0, 50) + ', svg=' + (b.querySelector('svg') ? 'yes' : 'no'));
     });
 
-    // Strategy 4: Among ALL visible buttons, pick the one most likely to be submit
-    // Heuristic: small square button (icon), near bottom-right of viewport, with SVG
-    for (const b of visBtns) {
-      const r = b.getBoundingClientRect();
-      const hasSvg = !!b.querySelector('svg');
+    // Strategy 4: Among ALL visible buttons, pick the one most likely to be submit.
+    // NEW Gemini: zero-state has NO send button; it appears only after typing.
+    // Exclude known non-submit buttons by aria-label; prefer the one closest to
+    // the input's bottom-right corner (where Gemini's send arrow sits).
+    const EXCLUDE_LABELS = [
+      'open sidebar', 'sidebar', 'upgrade', 'temporary chat', 'settings',
+      'upload', 'tools', 'mode picker', 'dictate', 'mic', 'menu', 'close',
+      'cancel', 'new chat', 'share', 'history', 'profile', 'account', 'help',
+      'extensions', 'gem manager', 'apps',
+    ];
+    const isExcluded = (b: HTMLButtonElement): boolean => {
+      const label = (b.getAttribute('aria-label') || '').toLowerCase().trim();
       const cls = String(b.className).toLowerCase();
-      const label = (b.getAttribute('aria-label') || '').toLowerCase();
+      const title = (b.getAttribute('title') || '').toLowerCase();
+      const combined = label + ' ' + title;
+      if (EXCLUDE_LABELS.some((k) => combined.includes(k))) return true;
+      if (cls.includes('menu') || cls.includes('nav') || cls.includes('close') || cls.includes('cancel')) return true;
+      return false;
+    };
 
-      // Skip obviously non-submit buttons (navigation, menu, etc.)
-      if (cls.includes('menu') || cls.includes('nav') || cls.includes('close') || cls.includes('cancel')) continue;
-      if (label.includes('cancel') || label.includes('close') || label.includes('menu')) continue;
+    let best: HTMLButtonElement | null = null;
+    let bestDist = Infinity;
+    const inputRect = inputEl ? inputEl.getBoundingClientRect() : null;
+    const targetX = inputRect ? inputRect.right : window.innerWidth;
+    const targetY = inputRect ? inputRect.bottom : window.innerHeight;
 
-      // Prefer small icon buttons (likely action buttons)
-      if (hasSvg && r.width <= 48 && r.height <= 48 && r.width >= 24 && r.height >= 24) {
-        console.log('[Gemini:adapter] Best guess submit btn: cls=' + cls.slice(0, 40) + ', size=' + r.width + 'x' + r.height + ', hasSvg=yes');
-        return b;
+    for (const b of visBtns) {
+      if (isExcluded(b)) continue;
+      const r = b.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      const dist = Math.hypot(cx - targetX, cy - targetY);
+      const hasSvg = !!b.querySelector('svg');
+      const isSmallIcon = r.width <= 56 && r.height <= 56 && r.width >= 20 && r.height >= 20;
+      const score = dist - (hasSvg && isSmallIcon ? 200 : 0);
+      if (score < bestDist) {
+        bestDist = score;
+        best = b;
       }
     }
 
-    return null;
+    if (best) {
+      const r = best.getBoundingClientRect();
+      console.log('[Gemini:adapter] Best-guess submit btn: aria-label="' + best.getAttribute('aria-label') + '", size=' + r.width + 'x' + r.height + ', hasSvg=' + (best.querySelector('svg') ? 'yes' : 'no') + ', dist=' + bestDist.toFixed(0));
+    }
+    return best;
   }
 
   /** Find buttons that are DOM-nearby the input element (siblings, parent siblings, etc.) */

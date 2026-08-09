@@ -8,7 +8,7 @@
 //  - 使用固定 nodeId（test_node_xxx）独立标签页，不污染工作台节点
 // ============================================================
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ProviderName, WorkbenchExecResult, WorkbenchGrabResult, ElementRole, ProviderCustomSelectors } from '../shared/types';
+import type { ProviderName, ElementRole, ProviderCustomSelectors } from '../shared/types';
 import { ALL_PROVIDERS, PROVIDER_LABELS, EMBED_MSG } from '../shared/constants';
 import { getProviderUrl } from '../shared/providers';
 import { loadCustomSelectors, upsertCustomSelector, clearCustomSelector } from '../shared/customSelectors';
@@ -20,16 +20,15 @@ interface LogLine {
   text: string;
 }
 
-const TEST_NODE_ID = `test_node_${Date.now().toString(36)}`;
-
 export function TestConsole() {
   const [provider, setProvider] = useState<ProviderName>('chatgpt');
   const [prompt, setPrompt] = useState('用一句话介绍你自己');
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [busy, setBusy] = useState(false);
   const [grabbing, setGrabbing] = useState(false);
-  const [result, setResult] = useState<WorkbenchExecResult | null>(null);
-  const [grabResult, setGrabResult] = useState<WorkbenchGrabResult | null>(null);
+  // iframe 内执行模式的结果（postMessage 回传，不走 background）
+  const [execText, setExecText] = useState('');
+  const [grabTextState, setGrabTextState] = useState('');
   const [t0, setT0] = useState(0);
   const logBoxRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -163,82 +162,106 @@ export function TestConsole() {
   useEffect(() => {
     const onMsg = (ev: MessageEvent) => {
       const data = ev.data as Record<string, unknown> | null;
-      if (!data || data.__multiAi !== EMBED_MSG.DIAGNOSE_RESULT) return;
-      setDiagLoading(false);
-      setDiag(data.result as Record<string, unknown>);
-      push('ok', '✅ 诊断完成，已显示在下方面板');
+      if (!data || typeof data !== 'object') return;
+      if (data.__multiAi === EMBED_MSG.DIAGNOSE_RESULT) {
+        setDiagLoading(false);
+        setDiag(data.result as Record<string, unknown>);
+        push('ok', '✅ 诊断完成，已显示在下方面板');
+      }
     };
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);
   }, []);
 
-  // 发起请求：完整走 WORKBENCH_EXECUTE 链路
+  // 监听 iframe 内执行 / 抓取结果回传（postMessage 模式）
+  useEffect(() => {
+    const onMsg = (ev: MessageEvent) => {
+      const data = ev.data as Record<string, unknown> | null;
+      if (!data || typeof data !== 'object') return;
+      const m = data.__multiAi as string;
+
+      // ── 执行状态 ──
+      if (m === EMBED_MSG.EXECUTE_STATUS) {
+        const status = (data.status as string) || '';
+        const detail = (data.detail as string) || '';
+        const p = (data.provider as string) || provider;
+        const label = PROVIDER_LABELS[p as ProviderName] ?? p;
+        const elapsed = t0 ? ` +${((Date.now() - t0) / 1000).toFixed(1)}s` : '';
+        push('info', `[${label}] 状态: ${status}${detail ? ' · ' + detail : ''}${elapsed}`);
+        if (status === 'done' || status === 'error' || status === 'login_required') setBusy(false);
+      } else if (m === EMBED_MSG.EXECUTE_STREAM) {
+        const content = (data.content as string) || '';
+        setExecText(content);
+      } else if (m === EMBED_MSG.EXECUTE_DONE) {
+        const finalContent = (data.finalContent as string) || '';
+        setExecText(finalContent);
+        const cost = t0 ? ((Date.now() - t0) / 1000).toFixed(1) : '0';
+        push('ok', `✅ 执行成功，耗时 ${cost}s，${finalContent.length} 字`);
+        setBusy(false);
+      } else if (m === EMBED_MSG.EXECUTE_ERROR) {
+        const message = (data.errorMessage as string) || (data.errorCode as string) || '';
+        const cost = t0 ? ((Date.now() - t0) / 1000).toFixed(1) : '0';
+        push('err', `❌ 执行失败（${cost}s）：${message}`);
+        setBusy(false);
+      }
+      // ── 抓取结果 ──
+      else if (m === EMBED_MSG.GRAB_RESULT) {
+        const text = (data.text as string) || '';
+        const reason = (data.reason as string) || '';
+        const cost = t0 ? ((Date.now() - t0) / 1000).toFixed(1) : '0';
+        setGrabTextState(text);
+        if (text && text.length > 0) {
+          push('ok', `✅ 手动获取成功（${cost}s），${text.length} 字`);
+        } else {
+          push('err', `❌ 手动获取失败（${cost}s）：${reason || '未读取到内容'}`);
+        }
+        setGrabbing(false);
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, [t0, provider]);
+
+  // 发起请求：直接在右侧可见 iframe 内执行（postMessage，不走后台标签页）
   const runExecute = async () => {
     if (busy || !prompt.trim()) return;
     setBusy(true);
-    setResult(null);
-    setGrabResult(null);
+    setExecText('');
     const t = Date.now();
     setT0(t);
-    push('info', `━━ 发起请求 → ${PROVIDER_LABELS[provider]}（nodeId=${TEST_NODE_ID}）━━`);
+    const taskId = `embed_exec_${Date.now().toString(36)}`;
+    push('info', `━━ 发起请求 → ${PROVIDER_LABELS[provider]}（iframe 内执行）━━`);
     push('info', `Prompt: ${prompt.slice(0, 80)}`);
-    try {
-      const resp = (await chrome.runtime.sendMessage({
-        type: 'WORKBENCH_EXECUTE',
-        nodeId: TEST_NODE_ID,
-        nodeType: 'process',
-        prompt,
-        providers: [provider],
-      })) as WorkbenchExecResult;
-      const cost = ((Date.now() - t) / 1000).toFixed(1);
-      if (resp && (resp.ok || (resp.outputs && Object.keys(resp.outputs).length > 0))) {
-        push('ok', `✅ 执行成功，耗时 ${cost}s`);
-      } else {
-        const err = resp?.errors?.[provider] || '无响应';
-        push('err', `❌ 执行失败（${cost}s）：${err}`);
-      }
-      setResult(resp);
-    } catch (e) {
-      push('err', `❌ 请求异常：${e instanceof Error ? e.message : String(e)}`);
-      setResult(null);
-    } finally {
+    const w = iframeRef.current?.contentWindow;
+    if (!w) {
+      push('err', '预览 iframe 未就绪，无法发起请求');
       setBusy(false);
+      return;
     }
+    w.postMessage({ __multiAi: EMBED_MSG.EXECUTE, provider, prompt, taskId }, '*');
   };
 
-  // 手动获取：WORKBENCH_GRAB 读屏
+  // 手动获取：在 iframe 内就地读屏（postMessage，不走后台标签页）
   const runGrab = async () => {
     if (grabbing) return;
     setGrabbing(true);
+    setGrabTextState('');
     push('info', `━━ 手动获取（读屏）→ ${PROVIDER_LABELS[provider]} ━━`);
     const t = Date.now();
-    try {
-      const resp = (await chrome.runtime.sendMessage({
-        type: 'WORKBENCH_GRAB',
-        nodeId: TEST_NODE_ID,
-        prompt,
-        providers: [provider],
-        tabIds: result?.tabIds,
-        urls: result?.urls,
-      })) as WorkbenchGrabResult;
-      const cost = ((Date.now() - t) / 1000).toFixed(1);
-      const txt = resp?.outputs?.[provider];
-      if (txt && txt.length > 0) {
-        push('ok', `✅ 手动获取成功（${cost}s），${txt.length} 字`);
-      } else {
-        push('err', `❌ 手动获取失败（${cost}s）：${resp?.errors?.[provider] || '未读取到内容'}`);
-      }
-      setGrabResult(resp);
-    } catch (e) {
-      push('err', `❌ 获取异常：${e instanceof Error ? e.message : String(e)}`);
-    } finally {
+    setT0(t);
+    const reqId = `embed_grab_${Date.now().toString(36)}`;
+    const w = iframeRef.current?.contentWindow;
+    if (!w) {
+      push('err', '预览 iframe 未就绪，无法获取');
       setGrabbing(false);
+      return;
     }
+    w.postMessage({ __multiAi: EMBED_MSG.GRAB, provider, prompt, reqId }, '*');
   };
 
   const iframeUrl = useMemo(() => getProviderUrl(provider), [provider]);
-  const autoText = result?.outputs?.[provider] ?? '';
-  const grabText = grabResult?.outputs?.[provider] ?? '';
+  const autoText = execText;
+  const grabText = grabTextState;
 
   return (
     <div className="tc-app">
@@ -257,8 +280,8 @@ export function TestConsole() {
               value={provider}
               onChange={(e) => {
                 setProvider(e.target.value as ProviderName);
-                setResult(null);
-                setGrabResult(null);
+                setExecText('');
+                setGrabTextState('');
               }}
             >
               {ALL_PROVIDERS.map((p) => (
