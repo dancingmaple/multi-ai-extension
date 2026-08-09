@@ -471,7 +471,15 @@ function scheduleProbeGrab(get: () => WorkflowState, id: string, stage: number):
     void get()
       .grabNodeAnswers(id)
       .then(() => {
-        // 抓完后看是否还缺：缺则进入下一档继续探测
+        // 抓完后二次校验：节点若已被采纳(success)/重新运行/用户取消，就不再续档探测，
+        // 避免「采纳并继续」或重跑后旧探测回调又补一刀造成竞态。
+        const n = get().nodes.find((x) => x.id === id);
+        if (!n) return;
+        if (n.data.status === 'success') {
+          get().updateNodeData(id, { probeStage: undefined });
+          return;
+        }
+        // 还缺则进入下一档继续探测
         scheduleProbeGrab(get, id, stage + 1);
       });
   }, delaySec * 1000);
@@ -874,12 +882,41 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       const res = await chrome.storage.local.get(STORAGE_KEY);
       const saved = res[STORAGE_KEY] as { nodes: WBNode[]; edges: Edge[] } | undefined;
       if (saved && Array.isArray(saved.nodes) && saved.nodes.length > 0) {
-        // 清除过期的自动获取倒计时标记（定时器不会跨页面加载存活）
-        const cleaned = saved.nodes.map((n) => ({
-          ...n,
-          data: { ...n.data, autoGrabAt: undefined, probeStage: undefined },
-        }));
+        // SW/页面重载后：保留 autoGrabAt/probeStage（用于续调探测），
+        // 仅清除已过期的倒计时标记（到点未执行的探测重新调度）。
+        const now = Date.now();
+        const cleaned = saved.nodes.map((n) => {
+          const at = n.data.autoGrabAt;
+          const keep = typeof at === 'number' && at > now && typeof n.data.probeStage === 'number';
+          return {
+            ...n,
+            data: { ...n.data, autoGrabAt: keep ? at : undefined, probeStage: keep ? n.data.probeStage : undefined },
+          };
+        });
         set({ nodes: cleaned, edges: saved.edges ?? [] });
+        // 重载后恢复未过期的探测定时器（SW 重启丢定时器，这里按剩余时间续调）
+        for (const n of cleaned) {
+          const at = n.data.autoGrabAt;
+          const stage = n.data.probeStage;
+          if (typeof at === 'number' && typeof stage === 'number' && at > now) {
+            const remainMs = at - now;
+            const t = setTimeout(() => {
+              autoGrabTimers.delete(n.id);
+              get().updateNodeData(n.id, { autoGrabAt: undefined });
+              void get()
+                .grabNodeAnswers(n.id)
+                .then(() => {
+                  const cur = get().nodes.find((x) => x.id === n.id);
+                  if (!cur || cur.data.status === 'success') {
+                    get().updateNodeData(n.id, { probeStage: undefined });
+                    return;
+                  }
+                  scheduleProbeGrab(get, n.id, stage + 1);
+                });
+            }, remainMs);
+            autoGrabTimers.set(n.id, t);
+          }
+        }
         return;
       }
     } catch {

@@ -7,7 +7,7 @@
 import type { ProviderName, WorkbenchExecResult } from '../shared/types';
 import { DEFAULT_SETTINGS } from '../shared/constants';
 import { handleAskAll } from './messageRouter';
-import { getTask } from './stateStore';
+import { getTask, deleteTask } from './stateStore';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -107,5 +107,10 @@ export async function runWorkbenchExecution(
     failed: Object.keys(errors),
     urls: Object.keys(urls),
   });
+
+  // 工作台任务用完即弃：从 stateStore 删除，避免 tasks Map / lastTask 无限膨胀
+  // （工作台有自己的运行历史与节点结果存储，不需要留 background 运行时态）
+  deleteTask(taskId);
+
   return { ok, outputs, errors, taskId, urls, tabIds };
 }

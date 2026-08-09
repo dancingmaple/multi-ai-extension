@@ -46,8 +46,15 @@ const MAX_HISTORY = 200;
 
 // 流式内容节流落盘：断线重连后可从这里恢复最新内容
 const streamWriteAt = new Map<string, number>();
+const STREAM_CACHE_TTL = 30 * 60 * 1000; // 30 分钟无更新的任务清理节流记录
 function persistStream(taskId: string, task: AskTaskState, force = false): void {
   const now = Date.now();
+  // 定期清理过期的节流记录，避免 Map 无限膨胀
+  if (streamWriteAt.size > 64) {
+    for (const [k, t] of streamWriteAt) {
+      if (now - t > STREAM_CACHE_TTL) streamWriteAt.delete(k);
+    }
+  }
   if (!force) {
     const last = streamWriteAt.get(taskId) || 0;
     if (now - last < 2000) return;
