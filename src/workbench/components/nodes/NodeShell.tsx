@@ -105,7 +105,10 @@ export const NodeShell = memo(function NodeShell({
   const updateNodeOutput = useWorkflowStore((s) => s.updateNodeOutput);
   const cancelAutoGrab = useWorkflowStore((s) => s.cancelAutoGrab);
   const allNodes = useWorkflowStore((s) => s.nodes);
-  const running = data.status === 'running';
+  // 节点运行按钮：既要看本节点状态，也要看全局工作流是否在跑；
+  // 否则用户在「▶ 运行工作流」中途点节点按钮会并发触发，造成"上一节点还没结束下个就开始"
+  const globalRunning = useWorkflowStore((s) => s.running);
+  const running = data.status === 'running' || (globalRunning && data.status === 'idle');
   const [grabbing, setGrabbing] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [refOpen, setRefOpen] = useState(false);

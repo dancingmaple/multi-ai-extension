@@ -413,6 +413,9 @@ function clearAutoGrabTimer(id: string): void {
   }
 }
 
+/** 正在执行的节点集合（防同节点重入 + 给 UI 判定按钮 disabled 用） */
+const executingNodes = new Set<string>();
+
 /**
  * 调度一次「到点自动获取」：在 delaySec 秒后自动触发该节点的手动获取，
  * 用于挽回自动抓取失败的回答（例如某家 AI 超时 / 未登录）。
@@ -601,14 +604,19 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   executeNode: async (id) => {
+    // 防同节点重入：上一次执行还没结束（背景 SW 卡/AI 超时/用户连点）
+    if (executingNodes.has(id)) return;
     const node = get().nodes.find((n) => n.id === id);
     if (!node) return;
     const { nodeType, prompt, providers, grabDelay } = node.data;
+
+    executingNodes.add(id);
 
     // 重新执行前，清掉上一轮可能还在排队的自动获取定时器
     clearAutoGrabTimer(id);
     get().updateNodeData(id, { autoGrabAt: undefined });
 
+    try {
     // 起点：纯种子输入，不调用 AI
     if (nodeType === 'start') {
       get().updateNodeData(id, { output: prompt, status: 'success', error: undefined });
@@ -636,7 +644,18 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     }
 
     // summarize / process：调用 background 复用 handleAskAll
-    get().updateNodeData(id, { status: 'running', error: undefined, renderedPrompt: rendered });
+    // 关键：先把上一轮的运行产物清空，否则运行中/失败时用户会看到「上次的旧内容」
+    // （outputs/output/urls/tabIds/taskId/autoGrabAt 都是本次运行的产物，不是节点固有状态）
+    get().updateNodeData(id, {
+      status: 'running',
+      error: undefined,
+      renderedPrompt: rendered,
+      outputs: {},
+      output: '',
+      urls: undefined,
+      tabIds: undefined,
+      taskId: undefined,
+    });
     try {
       const result = await sendWorkbenchExecute(rendered, providers, id, nodeType);
       const hasOutput = !!result && Object.keys(result.outputs).length > 0;
@@ -673,6 +692,9 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       }
     } catch (e) {
       get().updateNodeData(id, { status: 'error', error: e instanceof Error ? e.message : String(e) });
+    }
+    } finally {
+      executingNodes.delete(id);
     }
   },
 
