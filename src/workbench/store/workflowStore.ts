@@ -699,6 +699,40 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       return;
     }
 
+    // summarize / process：执行前检查直接上游是否全部失败/无输出。
+    // 避免上游失败后下游仍白白调用 AI（基于空上下文回答毫无意义）。
+    // 全部上游都失败或无输出 → 节点标 error 并跳过；部分正常 → 继续让 AI 处理可用输入。
+    {
+      const allEdges = get().edges;
+      const allNodesNow = get().nodes;
+      const upstreamIds = allEdges.filter((e) => e.target === id).map((e) => e.source);
+      if (upstreamIds.length > 0) {
+        const upstreamNodes = upstreamIds
+          .map((uid) => allNodesNow.find((n) => n.id === uid))
+          .filter(Boolean) as typeof allNodesNow;
+        if (
+          upstreamNodes.length > 0 &&
+          upstreamNodes.every(
+            (n) => n.data.status === 'error' || !n.data.output || n.data.output.trim().length === 0
+          )
+        ) {
+          const details = upstreamNodes
+            .map((n) => (n.data.status === 'error' ? `${n.data.label}(失败)` : `${n.data.label}(无输出)`))
+            .join('、');
+          get().updateNodeData(id, {
+            status: 'error',
+            error: `上游节点未提供有效输出（${details}）。请先修复上游后再运行。`,
+            outputs: {},
+            output: '',
+            urls: undefined,
+            tabIds: undefined,
+            taskId: undefined,
+          });
+          return;
+        }
+      }
+    }
+
     // summarize / process：调用 background 复用 handleAskAll
     // 关键：先把上一轮的运行产物清空，否则运行中/失败时用户会看到「上次的旧内容」
     // （outputs/output/urls/tabIds/taskId/autoGrabAt 都是本次运行的产物，不是节点固有状态）
