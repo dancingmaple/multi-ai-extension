@@ -3,7 +3,7 @@
 // 四种节点的共享外壳：标题栏 + 状态徽标 + 提示词编辑 +
 // 可选 AI 平台选择 + 输出区（逐家可编辑/复制）+ 运行/采纳/重试操作 + 连线桩。
 // ============================================================
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Handle, Position } from 'reactflow';
 import type { WorkbenchNodeData } from '../../store/workflowStore';
 import { useWorkflowStore } from '../../store/workflowStore';
@@ -39,7 +39,56 @@ interface Props {
   accent: Accent;
 }
 
-export function NodeShell({
+/**
+ * 逐家回答的可编辑框：本地草稿为唯一真源，输入时只改本地 state（光标不受
+ * ReactFlow 节点重渲染影响），失焦后跟随外部 store 变化（如手动获取补全）。
+ */
+const EditableAnswer = memo(function EditableAnswer({
+  value,
+  label,
+  copied,
+  onCopy,
+  onEdit,
+}: {
+  value: string;
+  label: string;
+  copied: boolean;
+  onCopy: () => void;
+  onEdit: (text: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!focused.current) setDraft(value);
+  }, [value]);
+
+  return (
+    <div className="wb-answer">
+      <div className="wb-answer__head">
+        <span className="wb-answer__name">{label}</span>
+        <button type="button" className="wb-copy" onClick={onCopy}>
+          {copied ? '已复制' : '复制'}
+        </button>
+      </div>
+      <textarea
+        className="wb-answer__edit nodrag nowheel"
+        rows={5}
+        value={draft}
+        onFocus={() => (focused.current = true)}
+        onBlur={() => {
+          focused.current = false;
+          setDraft(value);
+        }}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          onEdit(e.target.value);
+        }}
+      />
+    </div>
+  );
+});
+
+export const NodeShell = memo(function NodeShell({
   id,
   data,
   selected,
@@ -61,6 +110,27 @@ export function NodeShell({
   const [copied, setCopied] = useState<string | null>(null);
   const [refOpen, setRefOpen] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement>(null);
+
+  // ── 本地草稿：提示词 / 变量名（输入时只改本地，避免光标被重渲染重置） ──
+  const [promptDraft, setPromptDraft] = useState(data.prompt);
+  const promptFocused = useRef(false);
+  useEffect(() => {
+    if (!promptFocused.current) setPromptDraft(data.prompt);
+  }, [data.prompt]);
+
+  const [varNameDraft, setVarNameDraft] = useState(data.varName ?? '');
+  const varFocused = useRef(false);
+  useEffect(() => {
+    if (!varFocused.current) setVarNameDraft(data.varName ?? '');
+  }, [data.varName]);
+
+  // 自动获取秒数：本地草稿（数字输入框同样避免光标重置）
+  const [delayDraft, setDelayDraft] = useState(data.grabDelay === undefined ? '' : String(data.grabDelay));
+  const delayFocused = useRef(false);
+  useEffect(() => {
+    if (!delayFocused.current)
+      setDelayDraft(data.grabDelay === undefined ? '' : String(data.grabDelay));
+  }, [data.grabDelay]);
 
   // 自动获取倒计时（本地心跳，仅用于显示）
   const [now, setNow] = useState(Date.now());
@@ -116,6 +186,7 @@ export function NodeShell({
     const start = ta?.selectionStart ?? data.prompt.length;
     const end = ta?.selectionEnd ?? data.prompt.length;
     const next = data.prompt.slice(0, start) + token + data.prompt.slice(end);
+    setPromptDraft(next); // 同步本地草稿，避免光标跳末尾
     updateNodeData(id, { prompt: next });
     setRefOpen(false);
     requestAnimationFrame(() => {
@@ -157,17 +228,25 @@ export function NodeShell({
           <label className="wb-varname__label">变量名</label>
           <input
             className={`wb-input wb-varname__input nodrag nowheel ${
-              data.varName && !isValidVarName(data.varName) ? 'wb-input--invalid' : ''
+              varNameDraft && !isValidVarName(varNameDraft) ? 'wb-input--invalid' : ''
             }`}
-            value={data.varName ?? ''}
+            value={varNameDraft}
             placeholder="如 summary（下游用 {{summary}} 引用）"
-            onChange={(e) => updateNodeData(id, { varName: e.target.value })}
+            onFocus={() => (varFocused.current = true)}
+            onBlur={() => {
+              varFocused.current = false;
+              setVarNameDraft(data.varName ?? '');
+            }}
+            onChange={(e) => {
+              setVarNameDraft(e.target.value);
+              updateNodeData(id, { varName: e.target.value });
+            }}
           />
-          {data.varName && !isValidVarName(data.varName) && (
+          {varNameDraft && !isValidVarName(varNameDraft) && (
             <div className="wb-varname__warn">⚠ 变量名需以字母/中文开头，仅含字母数字下划线</div>
           )}
-          {data.varName && isValidVarName(data.varName) && (
-            <div className="wb-varname__hint">下游可用 <code>{`{{${data.varName}}}`}</code> 引用</div>
+          {varNameDraft && isValidVarName(varNameDraft) && (
+            <div className="wb-varname__hint">下游可用 <code>{`{{${varNameDraft}}}`}</code> 引用</div>
           )}
         </div>
 
@@ -177,8 +256,16 @@ export function NodeShell({
               ref={promptRef}
               className="wb-input nodrag nowheel"
               rows={4}
-              value={data.prompt}
-              onChange={(e) => updateNodeData(id, { prompt: e.target.value })}
+              value={promptDraft}
+              onFocus={() => (promptFocused.current = true)}
+              onBlur={() => {
+                promptFocused.current = false;
+                setPromptDraft(data.prompt);
+              }}
+              onChange={(e) => {
+                setPromptDraft(e.target.value);
+                updateNodeData(id, { prompt: e.target.value });
+              }}
               placeholder="支持 {{node_id.output}} 引用上游输出"
             />
             {refCandidates.length > 0 && (
@@ -251,13 +338,20 @@ export function NodeShell({
               min={0}
               step={5}
               className="wb-delay__input"
-              value={data.grabDelay ?? ''}
+              value={delayDraft}
               placeholder="0=不自动"
-              onChange={(e) =>
+              onFocus={() => (delayFocused.current = true)}
+              onBlur={() => {
+                delayFocused.current = false;
+                setDelayDraft(data.grabDelay === undefined ? '' : String(data.grabDelay));
+              }}
+              onChange={(e) => {
+                const v = e.target.value;
+                setDelayDraft(v);
                 updateNodeData(id, {
-                  grabDelay: e.target.value === '' ? undefined : Math.max(0, Number(e.target.value) || 0),
-                })
-              }
+                  grabDelay: v === '' ? undefined : Math.max(0, Number(v) || 0),
+                });
+              }}
             />
             {data.autoGrabAt && (
               <span className="wb-delay__count">
@@ -291,31 +385,21 @@ export function NodeShell({
               <div className="wb-output__warn" title={data.error}>⚠ 部分失败：{data.error.length > 60 ? data.error.slice(0, 57) + '…' : data.error}</div>
             ) : null}
 
-            {/* 逐家回答：可编辑 + 可复制 */}
+            {/* 逐家回答：可编辑 + 可复制（本地草稿输入，光标不受重渲染影响） */}
             {showProviders &&
               data.providers.map((p) => {
                 const txt = data.outputs[p];
                 if (!txt || txt.length === 0) return null;
                 const ck = `out_${p}`;
                 return (
-                  <div className="wb-answer" key={p}>
-                    <div className="wb-answer__head">
-                      <span className="wb-answer__name">{PROVIDER_LABELS[p]}</span>
-                      <button
-                        type="button"
-                        className="wb-copy"
-                        onClick={() => void copyText(txt, ck)}
-                      >
-                        {copied === ck ? '已复制' : '复制'}
-                      </button>
-                    </div>
-                    <textarea
-                      className="wb-answer__edit nodrag nowheel"
-                      rows={5}
-                      value={txt}
-                      onChange={(e) => updateNodeOutput(id, p as ProviderName, e.target.value)}
-                    />
-                  </div>
+                  <EditableAnswer
+                    key={p}
+                    value={txt}
+                    label={PROVIDER_LABELS[p]}
+                    copied={copied === ck}
+                    onCopy={() => void copyText(txt, ck)}
+                    onEdit={(text) => updateNodeOutput(id, p as ProviderName, text)}
+                  />
                 );
               })}
 
@@ -396,4 +480,4 @@ export function NodeShell({
       {showSource && <Handle type="source" position={Position.Right} />}
     </div>
   );
-}
+});

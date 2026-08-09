@@ -621,7 +621,17 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
     // 终点：聚合上游，不调用 AI（仅渲染模板）
     if (nodeType === 'end') {
-      get().updateNodeData(id, { output: rendered, status: 'success' });
+      const trimmed = rendered.trim();
+      if (!trimmed) {
+        // 上游没有输出时给出明确提示，避免「点了没反应」
+        get().updateNodeData(id, {
+          output: '',
+          status: 'error',
+          error: '终点没有拿到任何上游输出——请先运行其上游节点（或检查引用 {{变量名}} 是否写对）',
+        });
+      } else {
+        get().updateNodeData(id, { output: rendered, status: 'success', error: undefined });
+      }
       return;
     }
 
