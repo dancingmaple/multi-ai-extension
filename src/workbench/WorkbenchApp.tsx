@@ -65,6 +65,44 @@ export function WorkbenchApp() {
   const dockOpen = useWorkflowStore((s) => s.dockOpen);
   const toggleDock = useWorkflowStore((s) => s.toggleDock);
   const addNodeAt = useWorkflowStore((s) => s.addNodeAt);
+  const presetWorkflows = useWorkflowStore((s) => s.presetWorkflows);
+  const applyPreset = useWorkflowStore((s) => s.applyPreset);
+  const savePreset = useWorkflowStore((s) => s.savePreset);
+  const deletePreset = useWorkflowStore((s) => s.deletePreset);
+
+  // 预设流程下拉框状态：选中的预设 id；保存预设的输入（内联 prompt）
+  const [presetSel, setPresetSel] = useState<string>('');
+  const [presetName, setPresetName] = useState('');
+  const [savingPreset, setSavingPreset] = useState(false);
+  const [deletingPreset, setDeletingPreset] = useState(false);
+
+  // 选中的预设变化时加载到画布（含内置写作流水线 / 用户自定义）
+  const onPresetChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const id = e.target.value;
+    setPresetSel(id);
+    if (id && !running) {
+      await applyPreset(id);
+    }
+  };
+  // 「保存为预设」：用当前画布覆盖同名或新建
+  const onSavePreset = async () => {
+    const name = presetName.trim();
+    if (!name) return;
+    setSavingPreset(true);
+    await savePreset(name);
+    setSavingPreset(false);
+    setPresetName('');
+  };
+  // 「删除预设」：仅用户自定义可删
+  const onDeletePreset = async () => {
+    if (!presetSel || deletingPreset) return;
+    const target = presetWorkflows.find((p) => p.id === presetSel);
+    if (!target || target.builtin) return;
+    setDeletingPreset(true);
+    await deletePreset(presetSel);
+    setDeletingPreset(false);
+    setPresetSel('');
+  };
 
   const { screenToFlowPosition } = useReactFlow();
   // 右键菜单：记录菜单出现位置（画布坐标），菜单消失置空
@@ -136,6 +174,49 @@ export function WorkbenchApp() {
               <span>{b.label}</span>
             </button>
           ))}
+        </div>
+
+        {/* 预设流程下拉框 */}
+        <div className="wb-toolbar__group wb-presets" title="预设流程：选择即加载到画布">
+          <select
+            className="wb-presets__select"
+            value={presetSel}
+            onChange={(e) => void onPresetChange(e)}
+          >
+            <option value="">预设流程…</option>
+            {presetWorkflows.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.builtin ? '★ ' : ''}{p.name}
+              </option>
+            ))}
+          </select>
+          <input
+            className="wb-presets__input"
+            value={presetName}
+            placeholder="存为预设"
+            onChange={(e) => setPresetName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void onSavePreset();
+            }}
+          />
+          <button
+            className="wb-toolbar__btn wb-presets__save"
+            disabled={savingPreset || !presetName.trim()}
+            onClick={() => void onSavePreset()}
+            title="把当前画布保存为预设（同名覆盖）"
+          >
+            <SaveIcon size={13} />
+            存预设
+          </button>
+          <button
+            className="wb-toolbar__btn wb-presets__del"
+            disabled={deletingPreset || !presetSel}
+            onClick={() => void onDeletePreset()}
+            title="删除所选自定义预设（内置预设不可删除）"
+          >
+            <RefreshIcon size={13} />
+            删
+          </button>
         </div>
 
         <div className="wb-toolbar__spacer" />

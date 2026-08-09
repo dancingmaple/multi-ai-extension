@@ -93,6 +93,18 @@ export interface SavedWorkflow {
   updatedAt: number;
 }
 
+/** 预设流程（内置 + 用户可编辑）：工具栏下拉框直接加载 */
+export interface PresetWorkflow {
+  id: string;
+  name: string;
+  /** 是否内置预设（内置不可删除，可覆盖保存为自定义） */
+  builtin?: boolean;
+  nodes: WBNode[];
+  edges: Edge[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 /** 运行记录中，单个节点的过程与结果快照 */
 export interface RunNodeResult {
   id: string;
@@ -129,7 +141,35 @@ export interface RunRecord {
 const STORAGE_KEY = 'workbench_workflow_v1';
 const SAVED_KEY = 'workbench_saved_v1';
 const HISTORY_KEY = 'workbench_history_v1';
+const PRESET_KEY = 'workbench_presets_v1';
 const HISTORY_CAP = 50;
+
+/** 内置预设：公众号写作流水线（seedWorkflow 即该流程） */
+function builtinPreset(): PresetWorkflow {
+  const { nodes, edges } = seedWorkflow();
+  const now = Date.now();
+  return {
+    id: 'preset_writing',
+    name: '公众号写作流水线',
+    builtin: true,
+    nodes: sanitizeNodes(nodes),
+    edges: sanitizeEdges(edges),
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function sanitizePreset(p: PresetWorkflow): PresetWorkflow {
+  return {
+    id: p.id,
+    name: p.name,
+    builtin: p.builtin,
+    nodes: sanitizeNodes(p.nodes),
+    edges: sanitizeEdges(p.edges),
+    createdAt: p.createdAt,
+    updatedAt: p.updatedAt,
+  };
+}
 
 
 /** 通过 background 执行一次 AI 调用（WORKBENCH_EXECUTE） */
@@ -300,6 +340,8 @@ interface WorkflowState {
 
   // ── 已保存工作流（可复用库） ──
   savedWorkflows: SavedWorkflow[];
+  // ── 预设流程（内置 + 用户可编辑，工具栏下拉框加载） ──
+  presetWorkflows: PresetWorkflow[];
   // ── 运行历史 ──
   runHistory: RunRecord[];
   // ── 当前打开的浮层：'none' | 'saved' | 'history' ──
@@ -347,6 +389,19 @@ interface WorkflowState {
   renameSavedWorkflow: (id: string, name: string) => Promise<void>;
   deleteSavedWorkflow: (id: string) => Promise<void>;
 
+  // ── 预设流程（工具栏下拉框） ──
+  loadPresets: () => Promise<void>;
+  /** 把当前画布保存为预设：同名覆盖，否则新增 */
+  savePreset: (name: string) => Promise<void>;
+  /** 加载预设到画布 */
+  loadPreset: (id: string) => Promise<void>;
+  /** 删除用户自定义预设（内置不可删） */
+  deletePreset: (id: string) => Promise<void>;
+  /** 用指定预设覆盖当前画布并进入编辑（下拉框选中即调用） */
+  applyPreset: (id: string) => Promise<void>;
+  /** 把当前画布以「预设名」保存（供编辑后重新保存） */
+  saveCurrentAsPreset: (name: string) => Promise<void>;
+
   // ── 运行历史 ──
   loadRunHistory: () => Promise<void>;
   recordRun: () => void;
@@ -366,6 +421,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   edges: [],
   running: false,
   savedWorkflows: [],
+  presetWorkflows: [builtinPreset()],
   runHistory: [],
   panel: 'none',
   dockOpen: false,
@@ -702,6 +758,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   load: async () => {
+    // 先加载预设流程（内置写作流水线 + 用户自定义），供工具栏下拉框使用
+    void get().loadPresets();
     try {
       const res = await chrome.storage.local.get(STORAGE_KEY);
       const saved = res[STORAGE_KEY] as { nodes: WBNode[]; edges: Edge[] } | undefined;
@@ -826,6 +884,90 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     } catch {
       /* 静默 */
     }
+  },
+
+  // ── 预设流程（工具栏下拉框） ──────────────────────────
+  loadPresets: async () => {
+    const builtin = builtinPreset();
+    try {
+      const res = await chrome.storage.local.get(PRESET_KEY);
+      const stored = (res[PRESET_KEY] as PresetWorkflow[] | undefined) ?? [];
+      const list = Array.isArray(stored) ? stored : [];
+      // 内置预设总是存在（用户可能自定义覆盖同名 id：同名时以用户保存为准）
+      const merged: PresetWorkflow[] = list.some((p) => p.id === builtin.id)
+        ? list
+        : [builtin, ...list];
+      set({ presetWorkflows: merged.map(sanitizePreset) });
+    } catch {
+      set({ presetWorkflows: [builtin] });
+    }
+  },
+
+  savePreset: async (name) => {
+    const trimmed = (name || '').trim() || `预设 ${new Date().toLocaleString('zh-CN')}`;
+    const now = Date.now();
+    const current = {
+      nodes: sanitizeNodes(get().nodes),
+      edges: sanitizeEdges(get().edges),
+    };
+    const list = get().presetWorkflows;
+    // 同名覆盖（含内置预设：允许用当前画布覆盖「公众号写作流水线」）
+    const sameName = list.find((p) => p.name === trimmed);
+    const next: PresetWorkflow[] = sameName
+      ? list.map((p) =>
+          p.id === sameName.id
+            ? { ...p, ...current, name: trimmed, updatedAt: now }
+            : p
+        )
+      : [
+          {
+            id: `preset_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e4)}`,
+            name: trimmed,
+            nodes: current.nodes,
+            edges: current.edges,
+            createdAt: now,
+            updatedAt: now,
+          },
+          ...list,
+        ];
+    set({ presetWorkflows: next });
+    try {
+      await chrome.storage.local.set({ [PRESET_KEY]: next });
+    } catch {
+      /* 存储失败静默 */
+    }
+  },
+
+  applyPreset: async (id) => {
+    const p = get().presetWorkflows.find((x) => x.id === id);
+    if (!p) return;
+    // 加载预设到画布（保留预设内保存的节点结构；状态重置为 idle）
+    const nodes = p.nodes.map((n) => ({
+      ...n,
+      data: { ...n.data, status: 'idle' as NodeStatus, error: undefined, outputs: {}, output: '' },
+    }));
+    set({ nodes, edges: p.edges, panel: 'none' });
+    void get().save();
+  },
+
+  loadPreset: async (id) => {
+    await get().applyPreset(id);
+  },
+
+  deletePreset: async (id) => {
+    const target = get().presetWorkflows.find((p) => p.id === id);
+    if (!target || target.builtin) return; // 内置预设不可删除
+    const next = get().presetWorkflows.filter((p) => p.id !== id);
+    set({ presetWorkflows: next });
+    try {
+      await chrome.storage.local.set({ [PRESET_KEY]: next });
+    } catch {
+      /* 存储失败静默 */
+    }
+  },
+
+  saveCurrentAsPreset: async (name) => {
+    await get().savePreset(name);
   },
 
   // ── 运行历史 ──────────────────────────────────────────

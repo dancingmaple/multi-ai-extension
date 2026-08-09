@@ -154,6 +154,51 @@ body,
   font-weight: 700;
 }
 
+/* 预设流程下拉框 */
+.wb-presets {
+  gap: 5px;
+}
+.wb-presets__select {
+  height: 30px;
+  background: #0b1222;
+  color: #e5e9f0;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  max-width: 160px;
+}
+.wb-presets__select:focus {
+  outline: none;
+  border-color: #38bdf8;
+}
+.wb-presets__input {
+  width: 86px;
+  height: 30px;
+  background: #0b1222;
+  color: #e5e9f0;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.wb-presets__input:focus {
+  outline: none;
+  border-color: #38bdf8;
+}
+.wb-presets__save {
+  padding: 4px 9px;
+}
+.wb-presets__del {
+  padding: 4px 8px;
+  color: #fda4af;
+}
+.wb-presets__del:hover:not(:disabled) {
+  border-color: rgba(244, 63, 94, 0.5);
+  background: rgba(244, 63, 94, 0.12);
+}
+
 /* 添加节点按钮：四语义色，柔和低饱和 */
 .wb-add-btn {
   padding: 5px 9px;

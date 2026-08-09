@@ -3,6 +3,7 @@
 // ============================================================
 
 const MENU_ID = 'open-workbench';
+const TEST_MENU_ID = 'open-link-test';
 
 export function setupContextMenu(): void {
   chrome.runtime.onInstalled.addListener(() => {
@@ -18,11 +19,25 @@ export function setupContextMenu(): void {
         }
       }
     );
+    chrome.contextMenus.create(
+      {
+        id: TEST_MENU_ID,
+        title: '⚡ 打开请求链路测试台',
+        contexts: ['action'],
+      },
+      () => {
+        if (chrome.runtime.lastError) {
+          console.warn('[MultiAI:contextMenu] create test menu failed:', chrome.runtime.lastError.message);
+        }
+      }
+    );
   });
 
   chrome.contextMenus.onClicked.addListener((info) => {
     if (info.menuItemId === MENU_ID) {
       openWorkbench();
+    } else if (info.menuItemId === TEST_MENU_ID) {
+      openLinkTest();
     }
   });
 }
@@ -42,6 +57,26 @@ export function openWorkbench(): void {
         console.warn('[MultiAI:contextMenu] open window failed:', chrome.runtime.lastError.message);
       } else {
         console.log('[MultiAI:contextMenu] workbench window opened, id=', win?.id);
+      }
+    }
+  );
+}
+
+/** 打开 AI 请求/获取核心链路测试台（独立窗口） */
+export function openLinkTest(): void {
+  const url = chrome.runtime.getURL('test.html');
+  chrome.windows.create(
+    {
+      url,
+      type: 'popup',
+      state: 'maximized',
+      focused: true,
+    },
+    (win) => {
+      if (chrome.runtime.lastError) {
+        console.warn('[MultiAI:contextMenu] open link test failed:', chrome.runtime.lastError.message);
+      } else {
+        console.log('[MultiAI:contextMenu] link test window opened, id=', win?.id);
       }
     }
   );

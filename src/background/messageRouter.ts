@@ -513,12 +513,26 @@ async function dispatchToProvider(
     broadcastTaskState({ type: 'TASK_STATE_UPDATE', task: getTask(taskId)! });
 
     console.log('[MultiAI:background] Sending EXECUTE_PROMPT to tab', tabId);
-    await chrome.tabs.sendMessage(tabId, {
-      type: 'EXECUTE_PROMPT',
-      taskId,
-      provider,
-      prompt,
+    // 超时兜底：content script 可能已死/注入失败但 PING 偶发通过。
+    // 若无超时，sendMessage 永不回调 → handleAskAll 的 allSettled 永不完成 →
+    // workbenchEngine 卡在 await handleAskAll（deadline/事件等待根本不会启动）。
+    // 超时后 failProviderTask，让引擎把该 provider 记为失败并继续等待其余家。
+    const sendDone = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`向 ${provider} 页面发送指令超时（content script 无响应）`));
+      }, 20_000);
+      chrome.tabs.sendMessage(
+        tabId,
+        { type: 'EXECUTE_PROMPT', taskId, provider, prompt },
+        () => {
+          clearTimeout(timer);
+          const lastErr = chrome.runtime.lastError?.message;
+          if (lastErr) reject(new Error(lastErr));
+          else resolve();
+        }
+      );
     });
+    await sendDone;
 
     console.log('[MultiAI:background] EXECUTE_PROMPT sent to', provider);
   } catch (err) {
