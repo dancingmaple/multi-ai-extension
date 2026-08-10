@@ -62,7 +62,7 @@ function runExecute(msg: ExecutePromptMessage, replyTarget?: Window | null): voi
   const embed = !!replyTarget;
   const sendStatus = (status: string, detail?: string) => {
     if (embed && replyTarget) {
-      replyTo(replyTarget, { __multiAi: EMBED_MSG.EXECUTE_STATUS, provider: execMsg.provider, status, detail });
+      replyTo(replyTarget, { __multiAi: EMBED_MSG.EXECUTE_STATUS, provider: execMsg.provider, taskId: execMsg.taskId, status, detail });
     } else {
       chrome.runtime.sendMessage({
         type: 'PROVIDER_STATUS',
@@ -75,7 +75,7 @@ function runExecute(msg: ExecutePromptMessage, replyTarget?: Window | null): voi
   };
   const sendStream = (content: string) => {
     if (embed && replyTarget) {
-      replyTo(replyTarget, { __multiAi: EMBED_MSG.EXECUTE_STREAM, provider: execMsg.provider, content });
+      replyTo(replyTarget, { __multiAi: EMBED_MSG.EXECUTE_STREAM, provider: execMsg.provider, taskId: execMsg.taskId, content });
     } else {
       chrome.runtime.sendMessage({
         type: 'STREAM_UPDATE',
@@ -88,7 +88,7 @@ function runExecute(msg: ExecutePromptMessage, replyTarget?: Window | null): voi
   };
   const sendDone = (finalContent: string) => {
     if (embed && replyTarget) {
-      replyTo(replyTarget, { __multiAi: EMBED_MSG.EXECUTE_DONE, provider: execMsg.provider, finalContent });
+      replyTo(replyTarget, { __multiAi: EMBED_MSG.EXECUTE_DONE, provider: execMsg.provider, taskId: execMsg.taskId, finalContent });
     } else {
       chrome.runtime.sendMessage({
         type: 'TASK_DONE',
@@ -100,7 +100,7 @@ function runExecute(msg: ExecutePromptMessage, replyTarget?: Window | null): voi
   };
   const sendError = (errorCode: string, errorMessage: string) => {
     if (embed && replyTarget) {
-      replyTo(replyTarget, { __multiAi: EMBED_MSG.EXECUTE_ERROR, provider: execMsg.provider, errorCode, errorMessage });
+      replyTo(replyTarget, { __multiAi: EMBED_MSG.EXECUTE_ERROR, provider: execMsg.provider, taskId: execMsg.taskId, errorCode, errorMessage });
     } else {
       chrome.runtime.sendMessage({
         type: 'TASK_ERROR',

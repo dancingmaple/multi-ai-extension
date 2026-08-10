@@ -26,7 +26,8 @@ import type {
   WorkbenchGrabMessage,
   WorkbenchGrabResult,
 } from '../../shared/types';
-import { PROVIDER_LABELS } from '../../shared/constants';
+import { PROVIDER_LABELS, PROVIDER_URLS } from '../../shared/constants';
+import { embedBridge } from '../embedBridge';
 import { renderTemplate } from '../utils/template';
 import {
   buildRunMarkdown,
@@ -257,6 +258,111 @@ function sendWorkbenchGrab(
   });
 }
 
+// ── 内嵌执行（iframe 内执行，不开新标签页）─────────────────────
+const PREFER_EMBED_KEY = 'workbench_prefer_embed';
+
+/**
+ * 通过内嵌 iframe 执行一次节点：对各 provider 并行在各自 iframe 内运行，
+ * 结果流式写回节点输出，最终汇总成 WorkbenchExecResult。
+ * 若某 provider 的 iframe 未就绪（脚本未注入/站点禁止内嵌），该项记错误而非开标签页。
+ */
+async function runEmbedNode(
+  prompt: string,
+  providers: ProviderName[],
+  nodeId: string,
+  get: () => WorkflowState
+): Promise<WorkbenchExecResult> {
+  const outputs: Partial<Record<ProviderName, string>> = {};
+  const errors: Partial<Record<ProviderName, string>> = {};
+  const urls: Partial<Record<ProviderName, string>> = {};
+
+  await Promise.allSettled(
+    providers.map(async (p) => {
+      const taskId = `embed_${nodeId}_${p}_${Date.now().toString(36)}`;
+      const ready = await embedBridge.waitReady(p, 15000);
+      if (!ready) {
+        errors[p] = '内嵌 iframe 未就绪：脚本可能未注入，或该站点禁止内嵌（X-Frame-Options）';
+        return;
+      }
+      const res = await new Promise<{ text?: string; error?: string }>((resolve) => {
+        let settled = false;
+        const finish = (r: { text?: string; error?: string }) => {
+          if (settled) return;
+          settled = true;
+          resolve(r);
+        };
+        embedBridge.run(p, prompt, taskId, {
+          onStream: (content) => {
+            const node = get().nodes.find((n) => n.id === nodeId);
+            if (!node) return;
+            const outs = { ...(node.data.outputs as Record<ProviderName, string>), [p]: content };
+            get().updateNodeData(nodeId, {
+              outputs: outs,
+              output: joinOutputs(outs, node.data.providers, PROVIDER_LABELS),
+            });
+          },
+          onDone: (finalContent) => finish({ text: finalContent }),
+          onError: (code, msg) => finish({ error: `${code}: ${msg}` }),
+        });
+        // 安全超时兜底（各家 responseTimeout 上限 120s，这里给 150s）
+        setTimeout(() => finish({ error: '内嵌执行超时（150s）' }), 150_000);
+      });
+      if (res.text && res.text.length > 0) {
+        outputs[p] = res.text;
+        urls[p] = PROVIDER_URLS[p];
+      } else if (res.error) {
+        errors[p] = res.error;
+      }
+    })
+  );
+
+  return { ok: Object.keys(outputs).length > 0, outputs, errors, urls, tabIds: undefined, taskId: undefined };
+}
+
+/**
+ * 通过内嵌 iframe 就地读屏（替代 WORKBENCH_GRAB 的标签页读屏）。
+ * 返回各家回答 + 所在 url（回看用）。
+ */
+async function grabEmbedNode(
+  prompt: string,
+  providers: ProviderName[],
+  nodeId: string,
+  get: () => WorkflowState
+): Promise<WorkbenchGrabResult> {
+  const outputs: Partial<Record<ProviderName, string>> = {};
+  const errors: Partial<Record<ProviderName, string>> = {};
+  const urls: Partial<Record<ProviderName, string>> = {};
+
+  for (const p of providers) {
+    get().setGrabProgress({ nodeId, provider: p });
+    const ready = await embedBridge.waitReady(p, 15000);
+    if (!ready) {
+      errors[p] = '内嵌 iframe 未就绪，无法读屏';
+      continue;
+    }
+    const reqId = `embed_grab_${nodeId}_${p}_${Date.now().toString(36)}`;
+    const res = await new Promise<{ text: string; method: string; reason?: string; url?: string }>((resolve) => {
+      let done = false;
+      embedBridge.grab(p, prompt, reqId, (r) => {
+        if (done) return;
+        done = true;
+        resolve(r);
+      });
+      setTimeout(() => {
+        if (!done) {
+          done = true;
+          resolve({ text: '', method: 'none', reason: '读屏超时' });
+        }
+      }, 45_000);
+    });
+    if (res.text && res.text.length > 0) outputs[p] = res.text;
+    else if (res.reason) errors[p] = res.reason;
+    if (res.url) urls[p] = res.url;
+  }
+
+  return { ok: Object.keys(outputs).length > 0, outputs, errors, urls, tabIds: undefined };
+}
+
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 function scheduleSave(get: () => WorkflowState): void {
   if (saveTimer) clearTimeout(saveTimer);
@@ -349,6 +455,13 @@ interface WorkflowState {
   // ── 会话坞（侧边嵌入/聚焦 AI 标签页）开关 ──
   dockOpen: boolean;
   toggleDock: () => void;
+  // ── 内嵌执行（iframe 内执行，不开新标签页）开关与面板 ──
+  /** true=节点运行时优先在内嵌 iframe 执行；false=沿用后台开标签页（WORKBENCH_EXECUTE） */
+  preferEmbed: boolean;
+  setPreferEmbed: (v: boolean) => void;
+  /** 内嵌执行面板（EmbeddedRunner）显隐 */
+  embedOpen: boolean;
+  toggleEmbed: () => void;
   /** 手动获取的逐平台进度（正在抓哪家的哪节点）；null = 无进行中的抓取 */
   grabProgress: { nodeId: string; provider: ProviderName } | null;
   setGrabProgress: (p: { nodeId: string; provider: ProviderName } | null) => void;
@@ -425,6 +538,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   runHistory: [],
   panel: 'none',
   dockOpen: false,
+  preferEmbed: true,
+  embedOpen: true,
   grabProgress: null,
   setGrabProgress: (p) => set({ grabProgress: p }),
 
@@ -506,26 +621,36 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     const urls: Partial<Record<ProviderName, string>> = { ...(prevUrls as Record<ProviderName, string>) };
     const tabIds: Partial<Record<ProviderName, number>> = { ...(prevTabIds as Record<ProviderName, number>) };
     try {
-      // 逐家抓取：每家完成后更新一次进度，用户能看到「正在抓 ChatGPT / 正在抓 Qwen…」
-      for (const p of providers) {
-        get().setGrabProgress({ nodeId: id, provider: p });
-        const result = await sendWorkbenchGrab(
-          sendPrompt,
-          [p],
-          id,
-          taskId,
-          tabIds[p] !== undefined ? { [p]: tabIds[p] } : undefined,
-          urls[p] ? { [p]: urls[p] } : undefined
-        );
-        const txt = result.outputs[p];
-        if (txt && txt.length > 0) {
-          // 手动获取 = 强制刷新：抓到的新内容直接覆盖旧内容
-          merged[p] = txt;
-        } else if (result.errors[p]) {
-          errs[p] = result.errors[p];
+      if (get().preferEmbed) {
+        // 内嵌模式：直接从各家 iframe 就地读屏（无需标签页）
+        const res = await grabEmbedNode(sendPrompt, providers, id, get);
+        for (const p of providers) {
+          if (res.outputs[p]) merged[p] = res.outputs[p];
+          else if (res.errors[p]) errs[p] = res.errors[p];
+          if (res.urls?.[p]) urls[p] = res.urls[p];
         }
-        if (result.urls?.[p]) urls[p] = result.urls[p];
-        if (result.tabIds?.[p] !== undefined) tabIds[p] = result.tabIds[p];
+      } else {
+        // 逐家抓取：每家完成后更新一次进度，用户能看到「正在抓 ChatGPT / 正在抓 Qwen…」
+        for (const p of providers) {
+          get().setGrabProgress({ nodeId: id, provider: p });
+          const result = await sendWorkbenchGrab(
+            sendPrompt,
+            [p],
+            id,
+            taskId,
+            tabIds[p] !== undefined ? { [p]: tabIds[p] } : undefined,
+            urls[p] ? { [p]: urls[p] } : undefined
+          );
+          const txt = result.outputs[p];
+          if (txt && txt.length > 0) {
+            // 手动获取 = 强制刷新：抓到的新内容直接覆盖旧内容
+            merged[p] = txt;
+          } else if (result.errors[p]) {
+            errs[p] = result.errors[p];
+          }
+          if (result.urls?.[p]) urls[p] = result.urls[p];
+          if (result.tabIds?.[p] !== undefined) tabIds[p] = result.tabIds[p];
+        }
       }
       const answered = providers.filter((p) => merged[p] && merged[p]!.length > 0);
       const output = joinOutputs(merged, providers, PROVIDER_LABELS);
@@ -638,7 +763,9 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       taskId: undefined,
     });
     try {
-      const result = await sendWorkbenchExecute(rendered, providers, id, nodeType);
+      const result: WorkbenchExecResult = get().preferEmbed
+        ? await runEmbedNode(rendered, providers, id, get)
+        : await sendWorkbenchExecute(rendered, providers, id, nodeType);
       const hasOutput = !!result && Object.keys(result.outputs).length > 0;
       if (result && (result.ok || hasOutput)) {
         const output = joinOutputs(result.outputs, providers, PROVIDER_LABELS);
@@ -760,6 +887,15 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   load: async () => {
     // 先加载预设流程（内置写作流水线 + 用户自定义），供工具栏下拉框使用
     void get().loadPresets();
+    // 恢复「优先内嵌执行」配置
+    try {
+      const pref = await chrome.storage.local.get(PREFER_EMBED_KEY);
+      if (typeof pref[PREFER_EMBED_KEY] === 'boolean') {
+        set({ preferEmbed: pref[PREFER_EMBED_KEY] as boolean });
+      }
+    } catch {
+      /* 忽略，使用默认 true */
+    }
     try {
       const res = await chrome.storage.local.get(STORAGE_KEY);
       const saved = res[STORAGE_KEY] as { nodes: WBNode[]; edges: Edge[] } | undefined;
@@ -1076,4 +1212,9 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
   closePanel: () => set({ panel: 'none' }),
   toggleDock: () => set((s) => ({ dockOpen: !s.dockOpen })),
+  setPreferEmbed: (v) => {
+    set({ preferEmbed: v });
+    chrome.storage.local.set({ [PREFER_EMBED_KEY]: v }).catch(() => {});
+  },
+  toggleEmbed: () => set((s) => ({ embedOpen: !s.embedOpen })),
 }));

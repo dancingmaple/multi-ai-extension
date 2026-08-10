@@ -20,6 +20,7 @@ import { EndNode } from './components/nodes/EndNode';
 import { SavedWorkflowsPanel } from './components/SavedWorkflowsPanel';
 import { RunHistoryPanel } from './components/RunHistoryPanel';
 import { SessionDock } from './components/SessionDock';
+import { EmbeddedRunner } from './components/EmbeddedRunner';
 import {
   PlayIcon,
   SaveIcon,
@@ -64,6 +65,10 @@ export function WorkbenchApp() {
   const runCount = useWorkflowStore((s) => s.runHistory.length);
   const dockOpen = useWorkflowStore((s) => s.dockOpen);
   const toggleDock = useWorkflowStore((s) => s.toggleDock);
+  const preferEmbed = useWorkflowStore((s) => s.preferEmbed);
+  const setPreferEmbed = useWorkflowStore((s) => s.setPreferEmbed);
+  const embedOpen = useWorkflowStore((s) => s.embedOpen);
+  const toggleEmbed = useWorkflowStore((s) => s.toggleEmbed);
   const addNodeAt = useWorkflowStore((s) => s.addNodeAt);
   const presetWorkflows = useWorkflowStore((s) => s.presetWorkflows);
   const applyPreset = useWorkflowStore((s) => s.applyPreset);
@@ -256,6 +261,22 @@ export function WorkbenchApp() {
             <PanelIcon size={14} />
             <span>会话</span>
           </button>
+          <button
+            className={`wb-toolbar__btn ${embedOpen ? 'wb-toolbar__btn--active' : ''}`}
+            onClick={toggleEmbed}
+            title="内嵌执行面板：节点在本页面 iframe 内运行，不再开新标签页"
+          >
+            <TerminalIcon size={14} />
+            <span>内嵌</span>
+          </button>
+          <button
+            className={`wb-toolbar__btn ${preferEmbed ? 'wb-toolbar__btn--active' : ''}`}
+            onClick={() => setPreferEmbed(!preferEmbed)}
+            title={preferEmbed ? '当前：优先内嵌 iframe 执行（点此切回开标签页）' : '当前：开新标签页执行（点此切回内嵌）'}
+          >
+            <SparkIcon size={14} />
+            <span>{preferEmbed ? '内嵌执行' : '标签页执行'}</span>
+          </button>
         </div>
 
         {/* 运行 / 重置 */}
@@ -367,6 +388,9 @@ export function WorkbenchApp() {
 
       {/* 侧边会话坞 */}
       <SessionDock />
+
+      {/* 内嵌执行面板（节点在本页面 iframe 内运行，不再开新标签页） */}
+      <EmbeddedRunner />
     </div>
   );
 }
