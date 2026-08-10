@@ -1,7 +1,7 @@
 import React, { useCallback, useRef } from 'react';
 import { useStore } from '../store';
-import { ALL_PROVIDERS, PROVIDER_LABELS } from '../../shared/constants';
 import type { ProviderName } from '../../shared/types';
+import { useEffectiveProviders } from '../../shared/useEffectiveProviders';
 import styles from './PromptInput.module.css';
 
 const PromptInput: React.FC = () => {
@@ -14,6 +14,8 @@ const PromptInput: React.FC = () => {
   const viewMode = useStore((s) => s.viewMode);
   const isLoading = useStore((s) => s.isLoading);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const effective = useEffectiveProviders();
 
   const handleSend = useCallback(() => {
     if (viewMode === 'web') {
@@ -48,17 +50,20 @@ const PromptInput: React.FC = () => {
       />
       <div className={styles.actions}>
         <div className={styles.providers}>
-          {ALL_PROVIDERS.map((p: ProviderName) => (
-            <label key={p} className={`${styles.chip} ${selectedProviders.includes(p) ? styles.chipOn : styles.chipOff}`}>
-              <input
-                type="checkbox"
-                checked={selectedProviders.includes(p)}
-                onChange={() => toggleProvider(p)}
-              />
-              <span className={styles.chipDot} />
-              {PROVIDER_LABELS[p]}
-            </label>
-          ))}
+          {effective.map((e) => {
+            const p = e.id as ProviderName;
+            return (
+              <label key={p} className={`${styles.chip} ${selectedProviders.includes(p) ? styles.chipOn : styles.chipOff}`}>
+                <input
+                  type="checkbox"
+                  checked={selectedProviders.includes(p)}
+                  onChange={() => toggleProvider(p)}
+                />
+                <span className={styles.chipDot} />
+                {e.label}
+              </label>
+            );
+          })}
         </div>
         <button
           className={`${styles.sendBtn} ${canSend ? styles.sendBtnReady : ''}`}

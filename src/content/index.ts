@@ -1,15 +1,51 @@
 import { onBackgroundMessage } from '../shared/messaging';
 import type { ExecutePromptMessage, ProviderName, ElementRole } from '../shared/types';
 import { executePrompt } from './executor';
-import { getProviderFromUrl } from '../shared/providers';
-import { EMBED_MSG } from '../shared/constants';
+import { getProviderFromUrl, resolveProviderFromUrl } from '../shared/providers';
+import { EMBED_MSG, isCustomProvider } from '../shared/constants';
 import { grabLocal } from './grabLocal';
 import { startPick } from './pickElement';
 import { runDiagnose } from './diagnose';
+import { getCustomProvider } from '../shared/customProviders';
+import { getCustomForProvider } from '../shared/customSelectors';
 
-const currentProvider: ProviderName | null = getProviderFromUrl(location.href);
+/** 测试台里「尚未保存」的自定义网页，用这个占位 id 通信 */
+export const DRAFT_PROVIDER = 'custom:draft';
+
+// 先同步认内置 7 家；随后异步补上用户自定义节点的匹配（自定义节点存在 storage 里）
+let currentProvider: ProviderName | null = getProviderFromUrl(location.href);
 
 console.log('[MultiAI:content] Content script loaded on', location.hostname, 'provider=', currentProvider);
+
+resolveProviderFromUrl(location.href)
+  .then((p) => {
+    if (p && p !== currentProvider) {
+      currentProvider = p;
+      console.log('[MultiAI:content] provider resolved to custom node:', p);
+      if (window.parent && window.parent !== window) {
+        replyTo(window.parent, { __multiAi: EMBED_MSG.READY, provider: p });
+      }
+    }
+  })
+  .catch(() => {});
+
+/**
+ * 是否接受父页面下发的这条指令。
+ * - 内置站点：必须 provider 完全一致，避免串台
+ * - 自定义节点 / 草稿：父页面（插件自身页面）显式指定即接受，
+ *   因为自定义网页刚录入时 storage 里还没有它，无法反查出 provider
+ */
+function accepts(p?: string | null): boolean {
+  if (!p) return false;
+  if (currentProvider && p === currentProvider) return true;
+  if (isCustomProvider(p)) return true;
+  return false;
+}
+
+/** 当前帧对外使用的 provider 标识 */
+function effectiveProvider(claimed?: string | null): ProviderName {
+  return currentProvider ?? claimed ?? DRAFT_PROVIDER;
+}
 
 // 记录当前任务 id，用于把网页地址变化回传给 background（网页视图定位原网页）
 let currentEmbedTaskId: string | undefined;
@@ -130,97 +166,118 @@ onBackgroundMessage((msg, _sender) => {
 
 // ── 嵌入视图：插件父页面（Fullscreen / 侧边栏的网页视图）通过 window.postMessage
 // 把任务下发给 iframe 内的 content script。跨域 postMessage 不受同源策略限制。 ──
-if (currentProvider) {
-  const provider = currentProvider;
+window.addEventListener('message', (ev: MessageEvent) => {
+  const data = ev.data as Record<string, unknown> | null;
+  if (!data || typeof data !== 'object') return;
 
-  window.addEventListener('message', (ev: MessageEvent) => {
-    const data = ev.data as Record<string, unknown> | null;
-    if (!data || typeof data !== 'object') return;
+  if (data.__multiAi === EMBED_MSG.PING) {
+    replyTo(ev.source as Window | null, {
+      __multiAi: EMBED_MSG.PONG,
+      provider: effectiveProvider(data.provider as string | undefined),
+    });
+    return;
+  }
 
-    if (data.__multiAi === EMBED_MSG.PING) {
-      replyTo(ev.source as Window | null, { __multiAi: EMBED_MSG.PONG, provider });
-      return;
+  if (data.__multiAi === EMBED_MSG.EXECUTE) {
+    const p = data.provider as ProviderName | undefined;
+    const prompt = data.prompt as string | undefined;
+    const taskId = data.taskId as string | undefined;
+    if (accepts(p) && p && prompt && taskId) {
+      console.log('[MultiAI:content] postMessage EXECUTE for', p, 'taskId=', taskId);
+      // 通过 postMessage 把结果回传给父页面（测试台可见的 iframe 内执行）
+      runExecute({ type: 'EXECUTE_PROMPT', taskId, provider: p, prompt }, ev.source as Window | null);
     }
+    return;
+  }
 
-    if (data.__multiAi === EMBED_MSG.EXECUTE) {
-      const p = data.provider as ProviderName | undefined;
-      const prompt = data.prompt as string | undefined;
-      const taskId = data.taskId as string | undefined;
-      if (p === provider && prompt && taskId) {
-        console.log('[MultiAI:content] postMessage EXECUTE for', p, 'taskId=', taskId);
-        // 通过 postMessage 把结果回传给父页面（测试台可见的 iframe 内执行）
-        runExecute({ type: 'EXECUTE_PROMPT', taskId, provider: p, prompt }, ev.source as Window | null);
+  // 嵌入视图的手动获取：就地读屏，把结果（或失败原因）回传父页面
+  if (data.__multiAi === EMBED_MSG.GRAB) {
+    const p = data.provider as ProviderName | undefined;
+    if (!accepts(p) || !p) return;
+    const prompt = (data.prompt as string | undefined) ?? '';
+    const reqId = data.reqId as string | undefined;
+    // 父页面可直接下发 response 选择器（自定义网页点选后立刻验证，尚未落库）
+    const inlineSel = (data.responseSelector as string | undefined) || '';
+    const src = ev.source as Window | null;
+
+    void (async () => {
+      let sel: string | null = inlineSel || null;
+      if (!sel) {
+        try {
+          sel = (await getCustomForProvider(p))?.response ?? null;
+        } catch {
+          sel = null;
+        }
       }
-      return;
-    }
-
-    // 嵌入视图的手动获取：就地读屏，把结果（或失败原因）回传父页面
-    if (data.__multiAi === EMBED_MSG.GRAB) {
-      const p = data.provider as ProviderName | undefined;
-      if (p !== provider) return;
-      const prompt = (data.prompt as string | undefined) ?? '';
-      const reqId = data.reqId as string | undefined;
+      if (!sel && isCustomProvider(p)) {
+        try {
+          sel = (await getCustomProvider(p))?.responseSelector ?? null;
+        } catch {
+          sel = null;
+        }
+      }
       let out: { text: string; method: string; reason?: string };
       try {
-        out = grabLocal(provider, prompt);
+        out = grabLocal(currentProvider ?? p, prompt, sel);
       } catch (e) {
         out = { text: '', method: 'none', reason: '读屏异常：' + (e instanceof Error ? e.message : String(e)) };
       }
-      replyTo(ev.source as Window | null, {
+      replyTo(src, {
         __multiAi: EMBED_MSG.GRAB_RESULT,
-        provider,
+        provider: p,
         reqId,
         text: out.text,
         method: out.method,
         reason: out.reason,
         url: location.href,
       });
-      return;
-    }
-
-    // 手动选取元素：父页面请求在 iframe 内点选输入框 / 发送按钮 / 回答区域
-    if (data.__multiAi === EMBED_MSG.PICK_START) {
-      const p = data.provider as ProviderName | undefined;
-      const role = data.role as ElementRole | undefined;
-      if (p !== provider || !role) return;
-      console.log('[MultiAI:content] PICK_START role=', role);
-      const src = ev.source as Window | null;
-      startPick(
-        role,
-        (r, selector) => {
-          console.log('[MultiAI:content] PICK_RESULT', r, selector);
-          replyTo(src, { __multiAi: EMBED_MSG.PICK_RESULT, role: r, selector });
-        },
-        () => {
-          // 取消（Esc）：回传空选择器，父页面知道取消
-          replyTo(src, { __multiAi: EMBED_MSG.PICK_RESULT, role, selector: '' });
-        }
-      );
-      return;
-    }
-
-    // 页面诊断：父页面请求扫描整页元素，回传结构化信息
-    if (data.__multiAi === EMBED_MSG.DIAGNOSE) {
-      const p = data.provider as ProviderName | undefined;
-      if (p !== provider) return;
-      console.log('[MultiAI:content] DIAGNOSE requested for', p);
-      const result = runDiagnose(p);
-      replyTo(ev.source as Window | null, {
-        __multiAi: EMBED_MSG.DIAGNOSE_RESULT,
-        provider: p,
-        result,
-        url: location.href,
-      });
-      return;
-    }
-  });
-
-  // 主动向父页面广播「我已就绪」：避免父页面 PING 早于 content script 注入的竞态
-  // （这正是「第一次发送没反应、第二次才正常」的根因之一）。
-  if (window.parent && window.parent !== window) {
-    const announce = () => replyTo(window.parent, { __multiAi: EMBED_MSG.READY, provider });
-    announce();
-    [200, 600, 1500, 3000, 6000].forEach((t) => setTimeout(announce, t));
-    window.addEventListener('load', announce);
+    })();
+    return;
   }
+
+  // 手动选取元素：父页面请求在 iframe 内点选输入框 / 发送按钮 / 回答区域
+  if (data.__multiAi === EMBED_MSG.PICK_START) {
+    const p = data.provider as ProviderName | undefined;
+    const role = data.role as ElementRole | undefined;
+    if (!accepts(p) || !role) return;
+    console.log('[MultiAI:content] PICK_START role=', role);
+    const src = ev.source as Window | null;
+    startPick(
+      role,
+      (r, selector) => {
+        console.log('[MultiAI:content] PICK_RESULT', r, selector);
+        replyTo(src, { __multiAi: EMBED_MSG.PICK_RESULT, role: r, selector, provider: p });
+      },
+      () => {
+        // 取消（Esc）：回传空选择器，父页面知道取消
+        replyTo(src, { __multiAi: EMBED_MSG.PICK_RESULT, role, selector: '', provider: p });
+      }
+    );
+    return;
+  }
+
+  // 页面诊断：父页面请求扫描整页元素，回传结构化信息
+  if (data.__multiAi === EMBED_MSG.DIAGNOSE) {
+    const p = data.provider as ProviderName | undefined;
+    if (!accepts(p) || !p) return;
+    console.log('[MultiAI:content] DIAGNOSE requested for', p);
+    const result = runDiagnose(currentProvider ?? p);
+    replyTo(ev.source as Window | null, {
+      __multiAi: EMBED_MSG.DIAGNOSE_RESULT,
+      provider: p,
+      result,
+      url: location.href,
+    });
+    return;
+  }
+});
+
+// 主动向父页面广播「我已就绪」：避免父页面 PING 早于 content script 注入的竞态
+// （这正是「第一次发送没反应、第二次才正常」的根因之一）。
+if (window.parent && window.parent !== window) {
+  const announce = () =>
+    replyTo(window.parent, { __multiAi: EMBED_MSG.READY, provider: effectiveProvider() });
+  announce();
+  [200, 600, 1500, 3000, 6000].forEach((t) => setTimeout(announce, t));
+  window.addEventListener('load', announce);
 }

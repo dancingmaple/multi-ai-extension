@@ -12,7 +12,7 @@ import ReactFlow, {
 } from 'reactflow';
 import { useWorkflowStore } from './store/workflowStore';
 import type { WorkbenchNodeType } from '@shared/types';
-import { ALL_PROVIDERS, PROVIDER_LABELS } from '@shared/constants';
+import { useEffectiveProviders } from '@shared/useEffectiveProviders';
 import { StartNode } from './components/nodes/StartNode';
 import { SummarizeNode } from './components/nodes/SummarizeNode';
 import { ProcessNode } from './components/nodes/ProcessNode';
@@ -62,6 +62,8 @@ export function WorkbenchApp() {
   const openPanel = useWorkflowStore((s) => s.openPanel);
   const exportRun = useWorkflowStore((s) => s.exportRun);
   const panel = useWorkflowStore((s) => s.panel);
+
+  const effective = useEffectiveProviders();
   const runCount = useWorkflowStore((s) => s.runHistory.length);
   const dockOpen = useWorkflowStore((s) => s.dockOpen);
   const toggleDock = useWorkflowStore((s) => s.toggleDock);
@@ -378,7 +380,7 @@ export function WorkbenchApp() {
           <code>Ctrl+Enter</code> 运行整个工作流。
         </span>
         <span className="wb-statusbar__providers">
-          {ALL_PROVIDERS.map((p) => PROVIDER_LABELS[p]).join(' / ')}
+          {effective.map((e) => e.label).join(' / ')}
         </span>
       </footer>
 

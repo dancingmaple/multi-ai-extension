@@ -4,6 +4,7 @@
 
 const MENU_ID = 'open-workbench';
 const TEST_MENU_ID = 'open-link-test';
+const SIDEPANEL_MENU_ID = 'open-sidepanel-fullscreen';
 
 export function setupContextMenu(): void {
   chrome.runtime.onInstalled.addListener(() => {
@@ -16,6 +17,18 @@ export function setupContextMenu(): void {
       () => {
         if (chrome.runtime.lastError) {
           console.warn('[MultiAI:contextMenu] create failed:', chrome.runtime.lastError.message);
+        }
+      }
+    );
+    chrome.contextMenus.create(
+      {
+        id: SIDEPANEL_MENU_ID,
+        title: '📐 打开侧边栏页面 (全屏)',
+        contexts: ['action'],
+      },
+      () => {
+        if (chrome.runtime.lastError) {
+          console.warn('[MultiAI:contextMenu] create sidepanel menu failed:', chrome.runtime.lastError.message);
         }
       }
     );
@@ -36,10 +49,36 @@ export function setupContextMenu(): void {
   chrome.contextMenus.onClicked.addListener((info) => {
     if (info.menuItemId === MENU_ID) {
       openWorkbench();
+    } else if (info.menuItemId === SIDEPANEL_MENU_ID) {
+      openSidepanelFullscreen();
     } else if (info.menuItemId === TEST_MENU_ID) {
       openLinkTest();
     }
   });
+}
+
+/**
+ * 打开「侧边栏页面」的独立全屏窗口。
+ * 复用 sidepanel.html，并带 ?mode=fullscreen 让页面按全屏形态渲染
+ * （与 messageRouter.openFullscreen() 使用同一 URL 约定）。
+ */
+export function openSidepanelFullscreen(): void {
+  const url = chrome.runtime.getURL('public/sidepanel.html') + '?mode=fullscreen';
+  chrome.windows.create(
+    {
+      url,
+      type: 'popup',
+      state: 'maximized',
+      focused: true,
+    },
+    (win) => {
+      if (chrome.runtime.lastError) {
+        console.warn('[MultiAI:contextMenu] open sidepanel fullscreen failed:', chrome.runtime.lastError.message);
+      } else {
+        console.log('[MultiAI:contextMenu] sidepanel fullscreen window opened, id=', win?.id);
+      }
+    }
+  );
 }
 
 /** 打开独立工作台窗口（popup + 默认最大化） */

@@ -17,6 +17,68 @@ function pageText(): string {
   return (document.body.innerText || document.body.textContent || '').replace(/\u00a0/g, ' ');
 }
 
+/* ── Gemini DOM 直取（优于整页剪刀法） ─────────────────────
+   Gemini 是 Angular 自定义元素：每条回答一个 <model-response>，
+   正文在 message-content.model-response-text > .markdown。
+   之前只靠 extractAnswer(pageText) 剪刀法，一旦用户气泡文本与
+   prompt 不完全逐字一致（换行/截断/富文本），定位就会失败 →
+   表现为「测试台无法自动获取 gemini」。这里优先走 DOM，
+   拿不到再退回剪刀法。 */
+const G_ANSWER_SELECTORS = [
+  'model-response',
+  'message-content.model-response-text',
+  '.model-response-text',
+  '[class*="response-container"] message-content',
+];
+const G_MARKDOWN_SEL = '.markdown, [class*="markdown"], .model-response-text';
+const G_NOISE_SEL = [
+  'model-thoughts',
+  '[class*="thought"]',
+  'sources-list',
+  '[class*="sources"]',
+  '[class*="citation"]',
+  'message-actions',
+  '[class*="response-footer"]',
+  'button',
+].join(',');
+
+function gAnswerEls(): Element[] {
+  for (const s of G_ANSWER_SELECTORS) {
+    const arr = [...document.querySelectorAll(s)];
+    if (arr.length) return arr;
+  }
+  return [];
+}
+
+function gLastAnswerEl(): Element | null {
+  const all = gAnswerEls();
+  return all[all.length - 1] || null;
+}
+
+function gClean(node: Element | null): string {
+  if (!node) return '';
+  const clone = node.cloneNode(true) as Element;
+  clone.querySelectorAll(G_NOISE_SEL).forEach((n) => n.parentNode?.removeChild(n));
+  const mds = [...clone.querySelectorAll(G_MARKDOWN_SEL)];
+  const src = mds.length ? mds : [clone];
+  const joined = src
+    .map((m) => ((m as HTMLElement).innerText || m.textContent || ''))
+    .filter(Boolean)
+    .join('\n\n');
+  return joined.replace(/\u00a0/g, ' ').replace(/[ \t]+\n/g, '\n').trim();
+}
+
+function gHasStopButton(): boolean {
+  const sels = ['button[aria-label*="Stop" i]', 'button[aria-label*="\u505c\u6b62"]', '.stop-icon', '[data-test-id="stop-button"]'];
+  return sels.some((s) =>
+    [...document.querySelectorAll(s)].some((e) => {
+      if (!(e instanceof HTMLElement)) return false;
+      const r = e.getBoundingClientRect();
+      return r.width > 2 && r.height > 2;
+    })
+  );
+}
+
 export class GeminiAdapter extends BaseAdapter {
   readonly provider: ProviderName = 'gemini';
 
@@ -483,13 +545,34 @@ export class GeminiAdapter extends BaseAdapter {
     const maxWait = this.getResponseMaxWait();
     const t0 = Date.now();
 
+    // DOM 门闩快照：进入时本轮回答必未渲染
+    const snapDomText = gClean(gLastAnswerEl());
+    const snapDomCount = gAnswerEls().length;
+    console.log('[Gemini:adapter] SNAPSHOT', { domLen: snapDomText.length, domCount: snapDomCount, pageLen: gateLen });
+
+    /** 优先 DOM 直取，拿不到再回退整页剪刀法 */
+    const readAnswer = (): string => {
+      const els = gAnswerEls();
+      if (els.length) {
+        const cur = gClean(els[els.length - 1]);
+        // DOM 门闩：文本与快照相同且条数未增 → 仍是上一轮，视作空
+        if (els.length > snapDomCount || cur !== snapDomText) return cur;
+        return '';
+      }
+      const text = pageText();
+      if (text.length <= gateLen + 12) return '';
+      return extractAnswer(text, prompt).text;
+    };
+
     const tick = () => {
       if (stopped) return;
       const now = Date.now();
-      const text = pageText();
-      if (!started && text.length > gateLen + 12) started = true;
-      const extracted = started ? extractAnswer(text, prompt) : { text: '', method: 'none' };
-      const real = extracted.text;
+      if (!started) {
+        const grew = pageText().length > gateLen + 12;
+        const domMoved = gAnswerEls().length > snapDomCount || gClean(gLastAnswerEl()) !== snapDomText;
+        if (grew || domMoved) started = true;
+      }
+      const real = started ? readAnswer() : '';
       const isPlaceholder = !real || STREAM_CONFIG.PLACEHOLDER_RE.test(real);
       const body = isPlaceholder ? '' : real;
       const show = body || (started ? STREAM_CONFIG.THINKING_PLACEHOLDER : '');
@@ -504,13 +587,14 @@ export class GeminiAdapter extends BaseAdapter {
         lastReal = '';
         stableSince = 0;
       }
-      const hasProgress = /(\u601d\u8003\u4e2d|\u641c\u7d22\u4e2d|\u8054\u7f51\u641c\u7d22\u4e2d|\u751f\u6210\u4e2d|\u6b63\u5728\u641c\u7d22|\u6b63\u5728\u601d\u8003|\u6b57\u5728\u9608\u8bfb|\u6b57\u5728\u8054\u7f51|Searching(?! for)|Reading\s+\d)/i.test(body);
+      const hasProgress = /(\u601d\u8003\u4e2d|\u641c\u7d22\u4e2d|\u8054\u7f51\u641c\u7d22\u4e2d|\u751f\u6210\u4e2d|\u6b63\u5728\u641c\u7d22|\u6b63\u5728\u601d\u8003|\u6b57\u5728\u9608\u8bfb|\u6b57\u5728\u8054\u7f51|Searching(?! for)|Reading\s+\d)/i.test(body) || gHasStopButton();
       const elapsed = body ? now - stableSince : 0;
       const need = hasProgress ? STREAM_CONFIG.SOFT_STABLE : STREAM_CONFIG.HARD_STABLE;
       const done = !!body && body === lastReal && (elapsed >= need || elapsed >= STREAM_CONFIG.ABS_CAP);
       if (done) {
         stopped = true;
-        const final = extractAnswer(pageText(), prompt).text || body;
+        const final = readAnswer() || body;
+        console.log('[Gemini:adapter] DONE finalLen=', final.length);
         onUpdate(final);
         onDone(final);
         cleanup();
@@ -519,9 +603,9 @@ export class GeminiAdapter extends BaseAdapter {
       if (now - t0 >= maxWait) {
         stopped = true;
         cleanup();
-        const final = extractAnswer(pageText(), prompt).text;
+        const final = readAnswer() || extractAnswer(pageText(), prompt).text;
         if (final && !STREAM_CONFIG.PLACEHOLDER_RE.test(final)) onDone(final);
-        else onError(new Error('StreamTimeoutError'));
+        else onError(new Error('StreamTimeoutError: \u8d85\u65f6\u672a\u80fd\u6293\u53d6\u5230 Gemini \u56de\u7b54\uff0c\u8bf7\u91cd\u8bd5\u6216\u7528\u300c\u624b\u52a8\u83b7\u53d6\u300d'));
       }
     };
 

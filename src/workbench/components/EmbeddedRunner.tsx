@@ -7,9 +7,10 @@
 // ============================================================
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useWorkflowStore } from '../store/workflowStore';
-import { PROVIDER_LABELS, EMBED_MSG } from '@shared/constants';
+import { PROVIDER_LABELS, PROVIDER_URLS, EMBED_MSG } from '@shared/constants';
 import type { ProviderName } from '@shared/types';
-import { getProviderUrl } from '@shared/providers';
+import { getProviderUrlAsync } from '@shared/providers';
+import { useEffectiveProviders } from '@shared/useEffectiveProviders';
 import { embedBridge } from '../embedBridge';
 import { PanelIcon, CloseIcon, LinkIcon, EyeIcon, EyeSlashIcon } from './icons';
 
@@ -30,6 +31,25 @@ export function EmbeddedRunner(): JSX.Element {
   const frameRefs = useRef<Record<string, HTMLIFrameElement | null>>({});
   const [readyMap, setReadyMap] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<ProviderName | null>(null);
+
+  // 内置 7 家 + 用户自定义 AI 节点（地址缓存在 storage，需异步解析）
+  const effective = useEffectiveProviders();
+  const labelOf = (p: ProviderName) => effective.find((e) => e.id === p)?.label ?? PROVIDER_LABELS[p] ?? p;
+  const [urls, setUrls] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const m: Record<string, string> = {};
+      await Promise.all(providers.map(async (p) => {
+        m[p] = await getProviderUrlAsync(p);
+      }));
+      if (alive) setUrls(m);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [providers.join(',')]);
+  const urlOf = (p: ProviderName) => urls[p] || PROVIDER_URLS[p] || '';
 
   // 统一路由 iframe 回传的 postMessage（含 PING/PONG/READY/EXECUTE_*/GRAB_RESULT）
   useEffect(() => {
@@ -73,14 +93,14 @@ export function EmbeddedRunner(): JSX.Element {
               <div key={p} className="wb-embed__row">
                 <div className="wb-embed__rowhead">
                   <span className={`wb-embed__dot ${ready ? 'is-ready' : ''}`} title={ready ? '脚本已就绪' : '加载中…'} />
-                  <span className="wb-embed__name">{PROVIDER_LABELS[p]}</span>
+                  <span className="wb-embed__name">{labelOf(p)}</span>
                   <span className="wb-embed__acts">
                     <button
                       type="button"
                       className="wb-embed__btn"
                       title="在浏览器新标签打开该 AI（回看/溯源）"
                       onClick={() =>
-                        chrome.tabs.create({ url: getProviderUrl(p), active: true }).catch(() => window.open(getProviderUrl(p), '_blank'))
+                        chrome.tabs.create({ url: urlOf(p), active: true }).catch(() => window.open(urlOf(p), '_blank'))
                       }
                     >
                       <LinkIcon size={11} />
@@ -104,8 +124,8 @@ export function EmbeddedRunner(): JSX.Element {
                     frameRefs.current[p] = el;
                   }}
                   className={`wb-embed__frame ${preview === p ? 'is-open' : ''}`}
-                  src={getProviderUrl(p)}
-                  title={PROVIDER_LABELS[p]}
+                  src={urlOf(p)}
+                  title={labelOf(p)}
                   allow="clipboard-read; clipboard-write; microphone; camera"
                   onLoad={() => {
                     const w = frameRefs.current[p]?.contentWindow ?? null;

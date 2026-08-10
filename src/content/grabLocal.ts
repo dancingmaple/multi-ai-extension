@@ -18,10 +18,43 @@ const COMMON_ROOTS = [
   'main',
 ];
 
-const PROVIDER_ROOTS: Record<string, (string | (() => Element | null))[]> = {
+/**
+ * 根节点候选项：
+ *  - string：CSS 选择器，命中的块通常含「问 + 答」，需走 extractAnswer 剪刀法
+ *  - function：动态定位，默认返回的就是「纯回答元素」，可直接裁头尾（isAnswer=true）
+ *  - { get, answer:false }：动态定位但结果含问答混排，仍走剪刀法
+ */
+type RootPick = string | (() => Element | null) | { get: () => Element | null; answer: boolean };
+
+const PROVIDER_ROOTS: Record<string, RootPick[]> = {
   zai: ['.chat-content', '.message-list', '.chat-messages', '.conversation-content', 'main[class*="chat"]', 'main'],
   doubao: ['[data-testid="message-list"]', '.chat-messages', '.message-list', 'main'],
-  gemini: ['.conversation-container', 'chat-window', '.chat-container', 'main'],
+  /**
+   * Gemini：必须取「最后一条」回答。
+   * 原来写死 '.conversation-container' 走 querySelector，多轮会话下永远命中
+   * 第一轮容器 → 手动获取拿回上一轮/首轮回答，表现为「获取不到 gemini」。
+   */
+  gemini: [
+    () => {
+      const els = document.querySelectorAll('model-response');
+      return els.length ? els[els.length - 1] : null;
+    },
+    () => {
+      const els = document.querySelectorAll('message-content.model-response-text, .model-response-text');
+      return els.length ? els[els.length - 1] : null;
+    },
+    // 整个 conversation-container 含「问 + 答」，交给剪刀法
+    {
+      get: () => {
+        const els = document.querySelectorAll('.conversation-container');
+        return els.length ? els[els.length - 1] : null;
+      },
+      answer: false,
+    },
+    'chat-window',
+    '.chat-container',
+    'main',
+  ],
   /** ChatGPT：动态查找最后一条 assistant 消息（整个元素即完整回答） */
   chatgpt: [
     () => {
@@ -82,29 +115,52 @@ function blockText(el: HTMLElement): string {
   return out.replace(/\u00a0/g, ' ');
 }
 
-function pickRoot(provider: ProviderName | null): { el: HTMLElement; isAnswer: boolean } {
-  const order = provider && PROVIDER_ROOTS[provider] ? PROVIDER_ROOTS[provider] : COMMON_ROOTS;
+function pickRoot(provider: ProviderName | null, customResponse?: string | null): { el: HTMLElement; isAnswer: boolean } {
+  const base: RootPick[] = provider && PROVIDER_ROOTS[provider] ? PROVIDER_ROOTS[provider] : COMMON_ROOTS;
+  // 用户手动点选过 response 元素 → 最高优先级，且视为「纯回答」（取最后一个匹配）
+  const order: RootPick[] = customResponse
+    ? [
+        {
+          get: () => {
+            try {
+              const els = document.querySelectorAll(customResponse);
+              return els.length ? els[els.length - 1] : null;
+            } catch {
+              return null;
+            }
+          },
+          answer: true,
+        },
+        ...base,
+      ]
+    : base;
+
   for (const sel of order) {
     let el: HTMLElement | null = null;
+    let answer = false;
     if (typeof sel === 'function') {
       const r = sel();
       el = r instanceof HTMLElement ? r : null;
+      answer = true;
+    } else if (typeof sel === 'object') {
+      const r = sel.get();
+      el = r instanceof HTMLElement ? r : null;
+      answer = sel.answer;
     } else {
       el = document.querySelector(sel) as HTMLElement | null;
     }
     if (el && isVisible(el) && blockText(el).trim().length > 20) {
-      const isAnswer = provider === 'chatgpt' && typeof sel === 'function';
-      return { el, isAnswer };
+      return { el, isAnswer: answer };
     }
   }
   return { el: document.body, isAnswer: false };
 }
 
-export function grabLocal(provider: ProviderName | null, prompt: string): GrabResult {
+export function grabLocal(provider: ProviderName | null, prompt: string, customResponse?: string | null): GrabResult {
   let root: HTMLElement;
   let isAnswer = false;
   try {
-    const r = pickRoot(provider);
+    const r = pickRoot(provider, customResponse);
     root = r.el;
     isAnswer = r.isAnswer;
   } catch {

@@ -38,6 +38,7 @@ import { trustedClickAt } from './trustedClick';
 import { buildMarkdown, fileNameFor } from '../shared/exportMarkdown';
 import { runWorkbenchExecution } from './workbenchEngine';
 import { ALL_PROVIDERS } from '../shared/constants';
+import { syncCustomSites } from './customSite';
 
 console.log('[MultiAI:messageRouter] build=spec-v2 2026-08-02');
 
@@ -132,6 +133,7 @@ const UI_TYPES = new Set([
   'GET_TASK_STATE',
   'RETRY_PROVIDER',
   'SWITCH_MODE',
+  'SYNC_CUSTOM_SITES',
   'NEW_CONVERSATION',
   'APPEND_TURN',
   'GET_CONVERSATION',
@@ -285,6 +287,13 @@ export async function handleUIMessage(
       if (msg.target === 'fullscreen') await openFullscreen();
       else await openSidePanel();
       return undefined;
+    }
+    case 'SYNC_CUSTOM_SITES': {
+      const r = await syncCustomSites().catch((e) => {
+        console.warn('[MultiAI:background] syncCustomSites failed:', e);
+        return { origins: [] as string[], hosts: [] as string[] };
+      });
+      return { ok: true, ...r };
     }
     case 'NEW_CONVERSATION': {
       const conv = await getOrCreateConversation(msg.conversationId, msg.title || '新对话');

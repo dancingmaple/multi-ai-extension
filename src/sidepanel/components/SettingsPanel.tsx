@@ -1,13 +1,15 @@
 import React from 'react';
 import { useStore } from '../store';
 import type { ProviderName } from '../../shared/types';
-import { ALL_PROVIDERS, PROVIDER_LABELS } from '../../shared/constants';
+import { useEffectiveProviders } from '../../shared/useEffectiveProviders';
 import styles from './SettingsPanel.module.css';
 
 const SettingsPanel: React.FC = () => {
   const settings = useStore((s) => s.settings);
   const saveSettings = useStore((s) => s.saveSettings);
   const setShowSettings = useStore((s) => s.setShowSettings);
+
+  const effective = useEffectiveProviders();
 
   const handleElementTimeout = (value: number) => {
     saveSettings({ ...settings, elementTimeoutMs: value || 5000 });
@@ -49,18 +51,21 @@ const SettingsPanel: React.FC = () => {
             <h3 className={styles.sectionTitle}>Response Timeout per Provider</h3>
             <p className={styles.sectionHint}>Max wait for AI to finish generating response (ms)</p>
 
-            {ALL_PROVIDERS.map((p) => (
-              <label key={p} className={styles.field}>
-                <span className={styles.label}>{PROVIDER_LABELS[p]}</span>
-                <input
-                  type="number"
-                  className={styles.input}
-                  value={settings.responseTimeoutMs[p] ?? 120000}
-                  onChange={(e) => handleResponseTimeout(p, Number(e.target.value))}
-                  min={30000} max={600000} step={10000}
-                />
-              </label>
-            ))}
+            {effective.map((e) => {
+              const p = e.id as ProviderName;
+              return (
+                <label key={p} className={styles.field}>
+                  <span className={styles.label}>{e.label}</span>
+                  <input
+                    type="number"
+                    className={styles.input}
+                    value={settings.responseTimeoutMs[p] ?? 120000}
+                    onChange={(e) => handleResponseTimeout(p, Number(e.target.value))}
+                    min={30000} max={600000} step={10000}
+                  />
+                </label>
+              );
+            })}
           </div>
         </div>
       </div>

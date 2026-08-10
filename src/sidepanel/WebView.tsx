@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from './store';
-import { ALL_PROVIDERS, PROVIDER_LABELS, PROVIDER_URLS, EMBED_MSG } from '../shared/constants';
+import { PROVIDER_LABELS, PROVIDER_URLS, EMBED_MSG } from '../shared/constants';
 import { sendToBackground } from '../shared/messaging';
 import type { ProviderName } from '../shared/types';
+import { getProviderUrlAsync } from '../shared/providers';
+import { useEffectiveProviders } from '../shared/useEffectiveProviders';
 import styles from './WebView.module.css';
 
 interface WebViewProps {
@@ -48,7 +50,7 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
   const [readyMap, setReadyMap] = useState<Record<string, boolean>>({});
   const [stalledMap, setStalledMap] = useState<Record<string, boolean>>({});
   const [notes, setNotes] = useState<Record<string, Note | undefined>>({});
-  const [widths, setWidths] = useState<number[]>(() => ALL_PROVIDERS.map(() => 1));
+  const [widths, setWidths] = useState<Record<string, number>>({});
   const [maxProvider, setMaxProvider] = useState<ProviderName | null>(null);
 
   const turn = React.useMemo(() => {
@@ -60,10 +62,32 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
   }, [conversation, selectedTurnId]);
 
   // 网页视图的 iframe 列直接跟随勾选，状态跟随当前 embed 任务
+  const effective = useEffectiveProviders();
   const providers: ProviderName[] = React.useMemo(
-    () => ALL_PROVIDERS.filter((p) => selectedProviders.includes(p)),
-    [selectedProviders]
+    () => effective.map((e) => e.id).filter((p) => selectedProviders.includes(p)),
+    [effective, selectedProviders]
   );
+
+  // 内置 7 家 + 用户自定义 AI 节点的标签 / 地址解析（自定义节点地址在 storage，需异步取）
+  const labelOf = (p: ProviderName) => effective.find((e) => e.id === p)?.label ?? PROVIDER_LABELS[p] ?? p;
+  const allowIds = React.useMemo(() => new Set(effective.map((e) => e.id)), [effective]);
+  const [urls, setUrls] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const m: Record<string, string> = {};
+      await Promise.all(
+        providers.map(async (p) => {
+          m[p] = await getProviderUrlAsync(p);
+        })
+      );
+      if (alive) setUrls(m);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [providers.join(',')]);
+  const urlOf = (p: ProviderName) => urls[p] || PROVIDER_URLS[p] || '';
 
   const liveTask = React.useMemo(() => {
     if (!task) return undefined;
@@ -151,7 +175,7 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
       }
 
       const provider = data.provider as ProviderName | undefined;
-      if (!provider || !ALL_PROVIDERS.includes(provider)) return;
+      if (!provider || !allowIds.has(provider)) return;
 
       if (data.__multiAi === EMBED_MSG.PONG || data.__multiAi === EMBED_MSG.READY) {
         markReady(provider);
@@ -234,8 +258,8 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
         ping(provider);
       }
     });
-    if (queued.length) {
-      setToast(`${queued.map((p) => PROVIDER_LABELS[p]).join('、')} 网页尚未就绪，就绪后会自动发送`);
+      if (queued.length) {
+        setToast(`${queued.map((p) => labelOf(p)).join('、')} 网页尚未就绪，就绪后会自动发送`);
       setTimeout(() => setToast(undefined), 3000);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -325,7 +349,7 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
   };
 
   const openInTab = (provider: ProviderName) => {
-    const url = historyUrls?.[provider] ?? liveTask?.providers[provider]?.url ?? PROVIDER_URLS[provider];
+    const url = historyUrls?.[provider] ?? liveTask?.providers[provider]?.url ?? urlOf(provider);
     chrome.tabs.create({ url, active: true }).catch(() => {});
   };
 
@@ -378,31 +402,26 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
     else if (dx >= 40) switchMax(-1);
   };
 
-  // 拖拽调整列宽
-  const dragging = useRef<{ index: number; startX: number; startWidths: number[] } | null>(null);
+  // 拖拽调整列宽（按 provider 记录宽度，支持任意数量的自定义节点）
+  const dragging = useRef<{ left: ProviderName; right: ProviderName; startX: number; startWidths: Record<string, number> } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const onHandleDown = (index: number, e: React.MouseEvent) => {
+  const onHandleDown = (left: ProviderName, right: ProviderName, e: React.MouseEvent) => {
     e.preventDefault();
-    dragging.current = { index, startX: e.clientX, startWidths: [...widths] };
+    dragging.current = { left, right, startX: e.clientX, startWidths: { ...widths } };
   };
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       if (!dragging.current || !containerRef.current || layout !== 'columns') return;
-      const { index, startX, startWidths } = dragging.current;
+      const { left, right, startX, startWidths } = dragging.current;
       const cw = containerRef.current.getBoundingClientRect().width;
       const dxPct = ((e.clientX - startX) / cw) * 100;
-      const next = [...startWidths];
-      const left = index;
-      const right = index + 1;
       const minPct = (MIN_PX / cw) * 100;
-      const leftNew = Math.max(minPct, startWidths[left] + dxPct);
-      const rightNew = Math.max(minPct, startWidths[right] - dxPct);
+      const leftNew = Math.max(minPct, (startWidths[left] ?? minPct) + dxPct);
+      const rightNew = Math.max(minPct, (startWidths[right] ?? minPct) - dxPct);
       if (leftNew >= minPct && rightNew >= minPct) {
-        next[left] = leftNew;
-        next[right] = rightNew;
-        setWidths(next);
+        setWidths({ ...startWidths, [left]: leftNew, [right]: rightNew });
       }
     };
     const onUp = () => {
@@ -418,7 +437,7 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
 
   useEffect(() => {
     const equal = providers.length ? 1 / providers.length : 1;
-    setWidths(ALL_PROVIDERS.map((p) => (providers.includes(p) ? equal : 0)));
+    setWidths(Object.fromEntries(providers.map((p) => [p, equal])));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providers.join(',')]);
 
@@ -459,8 +478,7 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
         >
           {maxProvider && <div className={styles.maxBackdrop} onClick={() => setMaxProvider(null)} />}
 
-      {ALL_PROVIDERS.map((provider, i) => {
-        if (!providers.includes(provider)) return <React.Fragment key={provider} />;
+      {providers.map((provider, i) => {
         const status = liveTask?.providers[provider]?.status ?? 'idle';
         const isErr = status === 'error' || status === 'login_required';
         const isLive = status === 'streaming' || status === 'sending' || status === 'waiting';
@@ -472,14 +490,14 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
 
         return (
           <React.Fragment key={provider}>
-            {layout === 'columns' && i > 0 && providers.includes(ALL_PROVIDERS[i - 1]) && (
-              <div className={styles.handle} onMouseDown={(e) => onHandleDown(i - 1, e)}>
+            {layout === 'columns' && i > 0 && (
+              <div className={styles.handle} onMouseDown={(e) => onHandleDown(providers[i - 1], providers[i], e)}>
                 <div className={styles.handleLine} />
               </div>
             )}
             <div
               className={`${styles.column} ${maximized ? styles.columnMax : ''}`}
-              style={layout === 'columns' && !maximized ? { flexGrow: widths[i] } : undefined}
+              style={layout === 'columns' && !maximized ? { flexGrow: widths[provider] ?? (providers.length ? 1 / providers.length : 1) } : undefined}
             >
               <div
                 className={styles.header}
@@ -487,7 +505,7 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
                 onMouseUp={maximized ? onSwipeUp : undefined}
                 onContextMenu={maximized ? (e) => e.preventDefault() : undefined}
               >
-                <span className={styles.label}>{PROVIDER_LABELS[provider]}</span>
+                <span className={styles.label}>{labelOf(provider)}</span>
                 {maximized && (
                   <span className={styles.maxIdx}>
                     {idx + 1} / {providers.length}
@@ -561,8 +579,8 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
                   frameRefs.current[provider] = el;
                 }}
                 className={styles.iframe}
-                src={historyUrls?.[provider] ?? liveTask?.providers[provider]?.url ?? PROVIDER_URLS[provider]}
-                title={PROVIDER_LABELS[provider]}
+                src={historyUrls?.[provider] ?? liveTask?.providers[provider]?.url ?? urlOf(provider)}
+                title={labelOf(provider)}
                 onLoad={() => {
                   // 加载完不等于脚本已注入：标记未就绪并 ping，但保留待发队列
                   markNotReady(provider);

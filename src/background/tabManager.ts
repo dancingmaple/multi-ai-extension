@@ -1,5 +1,5 @@
 import type { ProviderName } from '../shared/types';
-import { getProviderUrl, getProviderMatchPattern } from '../shared/providers';
+import { getProviderUrlAsync, getProviderMatchPattern } from '../shared/providers';
 import { TAB_SETTLE_MS, PING_RETRY_MAX, PING_RETRY_DELAY_MS } from '../shared/constants';
 import { sleep } from '../shared/utils';
 
@@ -128,7 +128,7 @@ export async function getOrCreateProviderTab(
 /** 把已存在的标签页重置为对应 AI 的新会话（导航到新对话地址 + 等待就绪） */
 async function resetTabToNewChat(tabId: number, provider: ProviderName): Promise<void> {
   try {
-    await chrome.tabs.update(tabId, { url: getProviderUrl(provider) });
+    await chrome.tabs.update(tabId, { url: await getProviderUrlAsync(provider) });
     await waitForTabReady(tabId);
     await sleep(TAB_SETTLE_MS);
     await ensureContentScriptReady(tabId);
@@ -140,7 +140,7 @@ async function resetTabToNewChat(tabId: number, provider: ProviderName): Promise
 }
 
 async function createProviderTab(provider: ProviderName): Promise<number> {
-  const url = getProviderUrl(provider);
+  const url = await getProviderUrlAsync(provider);
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       console.log('[MultiAI:tabManager] Creating new tab for', url, 'attempt', attempt + 1);

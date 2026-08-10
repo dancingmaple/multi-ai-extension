@@ -8,3 +8,6 @@ setupContextMenu();
 // 嵌入视图：剥离 X-Frame-Options / CSP，允许把 AI 网页嵌进插件 iframe
 import { installEmbedRules } from './dnr';
 installEmbedRules();
+// 用户自定义 AI 网页：动态注册 content script + 剥离 XFO/CSP
+import { setupCustomSites } from './customSite';
+setupCustomSites();

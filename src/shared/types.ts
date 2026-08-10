@@ -1,4 +1,30 @@
-export type ProviderName = 'chatgpt' | 'gemini' | 'deepseek' | 'qwen' | 'zai' | 'doubao' | 'kimi';
+/** 内置的 7 家（有专属适配器） */
+export type BuiltinProviderName = 'chatgpt' | 'gemini' | 'deepseek' | 'qwen' | 'zai' | 'doubao' | 'kimi';
+
+/**
+ * 平台标识。
+ * 除内置 7 家外，用户可在测试台自定义任意 AI 网页并存成新节点，
+ * 其 id 形如 `custom:xxxx`，因此这里放宽为 string。
+ */
+export type ProviderName = string;
+
+/** 用户自定义的 AI 网页（测试台录入 → 全局可用的新 AI 节点） */
+export interface CustomProvider {
+  /** 唯一 id，形如 custom:1754800000000 */
+  id: ProviderName;
+  /** 显示名，如「我的 Claude」 */
+  label: string;
+  /** 打开地址 */
+  url: string;
+  /** 手动点选得到的三个关键元素选择器 */
+  inputSelector?: string;
+  submitSelector?: string;
+  responseSelector?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type CustomProviderMap = Record<string, CustomProvider>;
 
 export type ProviderStatus =
   | 'idle'
@@ -100,6 +126,11 @@ export type RetryProviderMessage = {
 export type SwitchModeMessage = {
   type: 'SWITCH_MODE';
   target: 'fullscreen' | 'sidepanel';
+};
+
+/** 自定义 AI 网页有增删改（或刚授权主机权限）→ 让 background 重装动态脚本 / DNR 规则 */
+export type SyncCustomSitesMessage = {
+  type: 'SYNC_CUSTOM_SITES';
 };
 
 // ── 多轮 / 会话（§5） ───────────────────────────────
@@ -250,6 +281,7 @@ export type UIMessage =
   | GetTaskStateMessage
   | RetryProviderMessage
   | SwitchModeMessage
+  | SyncCustomSitesMessage
   | NewConversationMessage
   | AppendTurnMessage
   | GetConversationMessage

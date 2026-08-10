@@ -1,7 +1,7 @@
 import React from 'react';
 import { useStore } from '../store';
-import { PROVIDER_LABELS } from '../../shared/constants';
 import type { ProviderName } from '../../shared/types';
+import { useEffectiveProviders } from '../../shared/useEffectiveProviders';
 import StatusBadge from './StatusBadge';
 import styles from './ProviderTabs.module.css';
 
@@ -11,6 +11,8 @@ const ProviderTabs: React.FC = () => {
   const setActiveTab = useStore((s) => s.setActiveTab);
   const selectedProviders = useStore((s) => s.selectedProviders);
   const openReader = useStore((s) => s.openReader);
+  const effective = useEffectiveProviders();
+  const labelOf = (p: ProviderName) => effective.find((e) => e.id === p)?.label ?? p;
 
   return (
     <div className={styles.tabs}>
@@ -25,7 +27,7 @@ const ProviderTabs: React.FC = () => {
             onDoubleClick={() => openReader(selectedProviders, idx)}
             title="单击切换 · 双击大弹窗阅读"
           >
-            <span>{PROVIDER_LABELS[p]}</span>
+            <span>{labelOf(p)}</span>
             <StatusBadge status={status} />
           </button>
         );

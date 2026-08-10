@@ -7,7 +7,8 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { Handle, Position } from 'reactflow';
 import type { WorkbenchNodeData } from '../../store/workflowStore';
 import { useWorkflowStore } from '../../store/workflowStore';
-import { ALL_PROVIDERS, PROVIDER_LABELS } from '@shared/constants';
+import { PROVIDER_LABELS } from '@shared/constants';
+import { useEffectiveProviders } from '@shared/useEffectiveProviders';
 import { isValidVarName } from '../../utils/template';
 import type { ProviderName } from '@shared/types';
 import {
@@ -132,6 +133,11 @@ export const NodeShell = memo(function NodeShell({
   // 输出区折叠态（默认折叠，画布更清爽；点「展开」看全部内容）
   const [outputOpen, setOutputOpen] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement>(null);
+
+  // 内置 7 家 + 用户自定义 AI 节点：平台选择器与各处标签统一从这里取
+  const effective = useEffectiveProviders();
+  const labelOf = (p: ProviderName) =>
+    effective.find((e) => e.id === p)?.label ?? PROVIDER_LABELS[p] ?? p;
 
   // ── 本地草稿：提示词 / 变量名（输入时只改本地，避免光标被重渲染重置） ──
   const [promptDraft, setPromptDraft] = useState(data.prompt);
@@ -338,25 +344,28 @@ export const NodeShell = memo(function NodeShell({
 
         {showProviders && (
           <div className="wb-providers">
-            {ALL_PROVIDERS.map((p) => (
-              <label
-                key={p}
-                className={`wb-provider ${data.providers.includes(p) ? 'wb-provider--on' : ''}`}
-              >
-                <input
-                  type="checkbox"
-                  className="wb-provider__input nodrag"
-                  checked={data.providers.includes(p)}
-                  onChange={(e) => {
-                    const next = e.target.checked
-                      ? [...data.providers, p]
-                      : data.providers.filter((x) => x !== p);
-                    updateNodeData(id, { providers: next });
-                  }}
-                />
-                <span className="wb-provider__label">{PROVIDER_LABELS[p]}</span>
-              </label>
-            ))}
+            {effective.map((e) => {
+              const p = e.id;
+              return (
+                <label
+                  key={p}
+                  className={`wb-provider ${data.providers.includes(p) ? 'wb-provider--on' : ''}`}
+                >
+                  <input
+                    type="checkbox"
+                    className="wb-provider__input nodrag"
+                    checked={data.providers.includes(p)}
+                    onChange={(ev) => {
+                      const next = ev.target.checked
+                        ? [...data.providers, p]
+                        : data.providers.filter((x) => x !== p);
+                      updateNodeData(id, { providers: next });
+                    }}
+                  />
+                  <span className="wb-provider__label">{e.label}</span>
+                </label>
+              );
+            })}
           </div>
         )}
 
@@ -450,7 +459,7 @@ export const NodeShell = memo(function NodeShell({
                   <EditableAnswer
                     key={p}
                     value={txt}
-                    label={PROVIDER_LABELS[p]}
+                    label={labelOf(p)}
                     copied={copied === ck}
                     onCopy={() => void copyText(txt, ck)}
                     onEdit={(text) => updateNodeOutput(id, p as ProviderName, text)}
@@ -486,7 +495,7 @@ export const NodeShell = memo(function NodeShell({
                       onClick={() => openUrl(data.urls?.[p])}
                     >
                       <LinkIcon size={11} />
-                      {PROVIDER_LABELS[p]}
+                      {labelOf(p)}
                     </button>
                   ))}
                 </div>
@@ -516,7 +525,7 @@ export const NodeShell = memo(function NodeShell({
             >
               <RefreshIcon size={12} />
               {grabbingProvider
-                ? `正在抓 ${PROVIDER_LABELS[grabbingProvider]}…`
+                ? `正在抓 ${labelOf(grabbingProvider)}…`
                 : grabbing
                   ? '获取中…'
                   : missingCount > 0

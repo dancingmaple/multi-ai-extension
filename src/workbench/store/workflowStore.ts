@@ -26,7 +26,8 @@ import type {
   WorkbenchGrabMessage,
   WorkbenchGrabResult,
 } from '../../shared/types';
-import { PROVIDER_LABELS, PROVIDER_URLS } from '../../shared/constants';
+import { PROVIDER_LABELS } from '../../shared/constants';
+import { getProviderUrlAsync } from '../../shared/providers';
 import { embedBridge } from '../embedBridge';
 import { renderTemplate } from '../utils/template';
 import {
@@ -309,7 +310,7 @@ async function runEmbedNode(
       });
       if (res.text && res.text.length > 0) {
         outputs[p] = res.text;
-        urls[p] = PROVIDER_URLS[p];
+        urls[p] = await getProviderUrlAsync(p);
       } else if (res.error) {
         errors[p] = res.error;
       }

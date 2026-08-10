@@ -18,6 +18,8 @@ const manifest: ManifestV3Export = {
     'https://*.moonshot.cn/*',
     'https://kimi.com/*',
   ],
+  // 用户在测试台自定义任意 AI 网页时按需申请（chrome.permissions.request）
+  optional_host_permissions: ['http://*/*', 'https://*/*'],
   externally_connectable: {
     matches: [
       'http://localhost/*',

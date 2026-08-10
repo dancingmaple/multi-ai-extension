@@ -94,3 +94,13 @@ export const EMBED_MSG = {
 
 // 自定义元素选择器（手动修复 UI 变化）永久存储键
 export const CUSTOM_SELECTORS_KEY = 'multiAI.customSelectors';
+
+// 用户自定义 AI 网页（测试台录入后成为新的 AI 节点）永久存储键
+export const CUSTOM_PROVIDERS_KEY = 'multiAI.customProviders';
+
+/** 自定义 provider id 前缀 */
+export const CUSTOM_PROVIDER_PREFIX = 'custom:';
+
+export function isCustomProvider(p: string): boolean {
+  return typeof p === 'string' && p.startsWith(CUSTOM_PROVIDER_PREFIX);
+}
