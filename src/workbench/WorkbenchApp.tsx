@@ -308,8 +308,9 @@ export function WorkbenchApp() {
         </div>
       </header>
 
-      {/* 画布 */}
-      <div className="wb-canvas">
+      {/* 画布 + 内嵌执行面板：并排布局，内嵌面板作为右侧栏，不再遮挡画布 */}
+      <div className="wb-main">
+        <div className="wb-canvas">
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -371,6 +372,10 @@ export function WorkbenchApp() {
             ))}
           </div>
         )}
+        </div>
+
+        {/* 内嵌执行面板（节点在本页面 iframe 内运行，不再开新标签页） */}
+        <EmbeddedRunner />
       </div>
 
       {/* 底部状态栏 */}
@@ -391,9 +396,6 @@ export function WorkbenchApp() {
 
       {/* 侧边会话坞 */}
       <SessionDock />
-
-      {/* 内嵌执行面板（节点在本页面 iframe 内运行，不再开新标签页） */}
-      <EmbeddedRunner />
     </div>
   );
 }

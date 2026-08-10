@@ -3,7 +3,7 @@
 // 内嵌执行面板：为本工作流用到的每家 AI 常驻一个交互式 iframe（不 sandbox，
 // 以让 content script 注入并执行）。节点运行时，workflowStore 通过 embedBridge
 // 把 EXECUTE 指令 postMessage 给对应 iframe，结果流式回传并写回节点输出——
-// 全程不开新标签页。面板可折叠（折叠仅隐藏 UI，iframe 仍挂载以保持就绪）。
+// 全程不开新标签页。面板作为右侧栏与画布并排（不遮挡），可折叠。
 // ============================================================
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useWorkflowStore } from '../store/workflowStore';
@@ -30,6 +30,7 @@ export function EmbeddedRunner(): JSX.Element {
 
   const frameRefs = useRef<Record<string, HTMLIFrameElement | null>>({});
   const [readyMap, setReadyMap] = useState<Record<string, boolean>>({});
+  const [loadedMap, setLoadedMap] = useState<Record<string, boolean>>({});
   const [preview, setPreview] = useState<ProviderName | null>(null);
 
   // 内置 7 家 + 用户自定义 AI 节点（地址缓存在 storage，需异步解析）
@@ -66,6 +67,20 @@ export function EmbeddedRunner(): JSX.Element {
     return () => window.removeEventListener('message', onMsg);
   }, [providers]);
 
+  // 运行节点时，自动把预览聚焦到当前正在执行的 provider，
+  // 让用户实时看到该 AI 的执行过程，而不是面对空白面板。
+  useEffect(() => {
+    if (!running) return;
+    const runningNode = nodes.find((n) => n.data.status === 'running');
+    const active = runningNode?.data.providers[0];
+    if (active && active !== preview) setPreview(active);
+  }, [running, nodes, preview]);
+
+  const openInNewTab = (p: ProviderName) => {
+    const u = urlOf(p);
+    if (u) chrome.tabs.create({ url: u, active: true }).catch(() => window.open(u, '_blank'));
+  };
+
   return (
     <aside className={`wb-embed ${embedOpen ? '' : 'wb-embed--collapsed'}`}>
       <div className="wb-embed__header">
@@ -89,6 +104,8 @@ export function EmbeddedRunner(): JSX.Element {
         ) : (
           providers.map((p) => {
             const ready = readyMap[p];
+            const loaded = loadedMap[p];
+            const isPreview = preview === p;
             return (
               <div key={p} className="wb-embed__row">
                 <div className="wb-embed__rowhead">
@@ -99,9 +116,7 @@ export function EmbeddedRunner(): JSX.Element {
                       type="button"
                       className="wb-embed__btn"
                       title="在浏览器新标签打开该 AI（回看/溯源）"
-                      onClick={() =>
-                        chrome.tabs.create({ url: urlOf(p), active: true }).catch(() => window.open(urlOf(p), '_blank'))
-                      }
+                      onClick={() => openInNewTab(p)}
                     >
                       <LinkIcon size={11} />
                     </button>
@@ -111,38 +126,60 @@ export function EmbeddedRunner(): JSX.Element {
                       title="展开/收起内嵌预览"
                       onClick={() => setPreview((cur) => (cur === p ? null : p))}
                     >
-                      {preview === p ? <EyeSlashIcon size={11} /> : <EyeIcon size={11} />}
-                      {preview === p ? '收起' : '预览'}
+                      {isPreview ? <EyeSlashIcon size={11} /> : <EyeIcon size={11} />}
+                      {isPreview ? '收起' : '预览'}
                     </button>
                   </span>
                 </div>
 
                 {/* 始终挂载的执行 iframe：不 sandbox（需 content script 注入）。
-                    折叠（非预览）态用 0 高度占位但仍在 DOM 中，保持脚本就绪与连接。 */}
-                <iframe
-                  ref={(el) => {
-                    frameRefs.current[p] = el;
-                  }}
-                  className={`wb-embed__frame ${preview === p ? 'is-open' : ''}`}
-                  src={urlOf(p)}
-                  title={labelOf(p)}
-                  allow="clipboard-read; clipboard-write; microphone; camera"
-                  onLoad={() => {
-                    const w = frameRefs.current[p]?.contentWindow ?? null;
-                    embedBridge.registerProvider(p, w);
-                    try {
-                      w?.postMessage({ __multiAi: EMBED_MSG.PING, provider: p }, '*');
-                    } catch {
-                      /* ignore */
-                    }
-                  }}
-                />
+                    折叠（非预览）态用 0 高度占位但仍在 DOM 中，保持脚本就绪与连接；
+                    预览态展开为 340px。未就绪时叠加深色加载遮罩，避免白屏/空白页。 */}
+                <div className={`wb-embed__framebox ${isPreview ? '' : 'wb-embed__framebox--collapsed'}`}>
+                  <iframe
+                    ref={(el) => {
+                      frameRefs.current[p] = el;
+                    }}
+                    className={`wb-embed__frame ${isPreview ? 'is-open' : ''}`}
+                    src={urlOf(p)}
+                    title={labelOf(p)}
+                    allow="clipboard-read; clipboard-write; microphone; camera"
+                    onLoad={() => {
+                      setLoadedMap((m) => ({ ...m, [p]: true }));
+                      const w = frameRefs.current[p]?.contentWindow ?? null;
+                      embedBridge.registerProvider(p, w);
+                      try {
+                        w?.postMessage({ __multiAi: EMBED_MSG.PING, provider: p }, '*');
+                      } catch {
+                        /* ignore */
+                      }
+                    }}
+                  />
+                  {isPreview && !ready && (
+                    <div className="wb-embed__overlay">
+                      <span className="wb-embed__spinner" />
+                      <span>
+                        {loaded
+                          ? `${labelOf(p)} 可能无法在框架内显示`
+                          : `正在加载 ${labelOf(p)}…`}
+                      </span>
+                      <button type="button" className="wb-embed__overlay-btn" onClick={() => openInNewTab(p)}>
+                        在新标签页打开
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             );
           })
         )}
 
-        {running && <div className="wb-embed__hint">执行中：指令正通过内嵌 iframe 下发，不再开新标签页。</div>}
+        {running && (
+          <div className="wb-embed__hint">
+            执行中：指令正通过内嵌 iframe 下发，不再开新标签页。当前预览：
+            {preview ? labelOf(preview) : '—'}
+          </div>
+        )}
       </div>
     </aside>
   );
