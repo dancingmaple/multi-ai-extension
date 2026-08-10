@@ -367,9 +367,11 @@ export async function handleUIMessage(
       return await triggerExport(msg);
     }
     case 'TRUSTED_CLICK': {
-      const tabId = _sender.tab?.id;
+      // 优先用父页面（测试台 / 侧边栏网页视图）透传的宿主 tabId；
+      // 真实标签页场景由 content script 直接发，回退到 _sender.tab。
+      const tabId = (typeof msg.tabId === 'number' ? msg.tabId : _sender.tab?.id) as number | undefined;
       if (typeof tabId === 'number') {
-        // 受信任点击：坐标由 sidepanel 基于 iframe 在 sidepanel 视口中的位置算出
+        // 受信任点击：坐标为「宿主 tab 视口」绝对坐标（iframe 场景已由父页面加上偏移）
         await trustedClickAt(tabId, msg.x as number, msg.y as number);
       }
       return { type: 'ACK' };

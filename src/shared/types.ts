@@ -268,12 +268,15 @@ export type WorkbenchGrabResult = {
 };
 
 // 受信任点击：Kimi 等站点只接受 isTrusted 事件，content script 无法派发，
-// 故由 sidepanel 计算出绝对视口坐标后，让 background 用 chrome.debugger 点击。
-// x/y 为相对于 sidepanel 视口的绝对坐标。
+// 故由父页面（测试台 / 侧边栏网页视图）计算出绝对视口坐标后，让 background 用
+// chrome.debugger 点击。x/y 为相对于「宿主 tab 视口」的绝对坐标。
+// tabId 由父页面显式透传（iframe 场景下 _sender.tab 拿不到正确宿主 tab）；
+// 未提供时回退到 _sender.tab（真实标签页场景由 content script 直接发）。
 export type TrustedClickMessage = {
   type: 'TRUSTED_CLICK';
   x: number;
   y: number;
+  tabId?: number;
 };
 
 export type UIMessage =

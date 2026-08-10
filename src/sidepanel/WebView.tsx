@@ -170,6 +170,10 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
           const x = fr.left + r.left + r.width / 2;
           const y = fr.top + r.top + r.height / 2;
           sendToBackground({ type: 'TRUSTED_CLICK', x, y }).catch(() => {});
+          // 侧边栏没有可被 chrome.debugger 调试的标签页，受信任点击实际无法生效；
+          // 明确提示用户改用「测试台」或独立标签页发起 Kimi 请求。
+          setToast('Kimi 发送需真实标签页（受信任点击），侧边栏暂不支持；请用「请求链路测试台」或独立标签页发起');
+          setTimeout(() => setToast(undefined), 4000);
         }
         return;
       }

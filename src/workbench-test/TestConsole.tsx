@@ -295,6 +295,36 @@ export function TestConsole() {
     return () => window.removeEventListener('message', onMsg);
   }, [t0, provider, push, labelOf]);
 
+  // Kimi 等站点需要「受信任点击」：iframe 内的 content script 把发送钮在 iframe 内的
+  // 矩形发来（__kimiSend），这里加上 iframe 在测试台里的偏移，转发给后台在「本标签页」
+  // 正确位置点击发送（chrome.debugger 才能产生 isTrusted 事件）。
+  useEffect(() => {
+    const onMsg = (ev: MessageEvent) => {
+      const data = ev.data as Record<string, unknown> | null;
+      if (!data || typeof data !== 'object') return;
+      if (data.__kimiSend !== true || !data.rect) return;
+      const rect = data.rect as { left: number; top: number; width: number; height: number };
+      const frame = iframeRef.current?.getBoundingClientRect();
+      const ax = (frame?.left ?? 0) + rect.left + rect.width / 2;
+      const ay = (frame?.top ?? 0) + rect.top + rect.height / 2;
+      push('info', `🖱 受信任点击：iframe内→本页(${Math.round(ax)}, ${Math.round(ay)})`);
+      chrome.tabs.getCurrent((tab) => {
+        const tabId = tab?.id;
+        if (typeof tabId !== 'number') {
+          push('err', '无法获取本页标签页 ID，受信任点击失败（测试台需以标签页/弹窗形式打开）');
+          return;
+        }
+        chrome.runtime.sendMessage({ type: 'TRUSTED_CLICK', x: ax, y: ay, tabId }, () => {
+          if (chrome.runtime.lastError) {
+            push('err', '受信任点击失败：' + (chrome.runtime.lastError.message || '未知错误'));
+          }
+        });
+      });
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, [push]);
+
   // 发起请求：直接在右侧可见 iframe 内执行（postMessage，不走后台标签页）
   const runExecute = () => {
     if (busy || !prompt.trim()) return;

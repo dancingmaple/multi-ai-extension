@@ -195,18 +195,31 @@ export class KimiAdapter extends BaseAdapter {
     }
 
     const r = send.getBoundingClientRect();
-    // 按钮在 Kimi 标签页自身视口内的中心坐标。直接让 background 用 chrome.debugger
-    // 在该 tab 的同坐标处派发受信任点击（Kimi 只接受 isTrusted 事件）。
-    // 走 chrome.runtime 通道（而非 window.parent.postMessage）：对「侧边栏 iframe」
-    // 与「工作台独立标签页」两种上下文都正确，且不再依赖父窗口监听。
-    const cx = r.left + r.width / 2;
-    const cy = r.top + r.height / 2;
-    try {
-      await chrome.runtime.sendMessage({ type: 'TRUSTED_CLICK', x: cx, y: cy });
-      console.log('[Kimi:adapter] submit → 已请求 background 受信任点击', { cx, cy });
-    } catch (e) {
-      throw new SubmitFailedError(this.provider, '请求后台受信任点击失败：' + (e instanceof Error ? e.message : String(e)));
+    // 按钮在 Kimi 页面（iframe）视口内的矩形。
+    const rect = { left: r.left, top: r.top, width: r.width, height: r.height };
+
+    // 真实标签页里：window.parent === window，Kimi 整页就是该 tab，
+    // 直接让 background 用 chrome.debugger 在该 tab 同坐标处派发受信任点击即可。
+    if (!window.parent || window.parent === window) {
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'TRUSTED_CLICK',
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        });
+        console.log('[Kimi:adapter] submit → 已请求 background 受信任点击（标签页模式）', rect);
+      } catch (e) {
+        throw new SubmitFailedError(this.provider, '请求后台受信任点击失败：' + (e instanceof Error ? e.message : String(e)));
+      }
+      return;
     }
+
+    // 嵌入视图（iframe，如测试台 / 侧边栏网页视图）：content script 无法跨域读取自身
+    // iframe 在宿主页里的偏移，而 chrome.debugger 只能点「宿主 tab 视口」坐标。因此把
+    // 按钮在 iframe 内的矩形交给父页面，由父页面加上 iframe 偏移后再转发给 background 点击。
+    // （沿用 WebView 已实现的 __kimiSend 桥接协议。）
+    window.parent.postMessage({ __kimiSend: true, rect, provider: this.provider }, '*');
+    console.log('[Kimi:adapter] submit → 已请求父页面发起受信任点击（iframe 模式）', rect);
     // background 用 chrome.debugger 点击后 Kimi 开始生成；这里无需再等
   }
 }
