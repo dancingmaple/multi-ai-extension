@@ -28,6 +28,7 @@ import {
 
 const STATUS_LABEL: Record<string, string> = {
   idle: '空闲',
+  queued: '排队中',
   running: '运行中',
   reviewing: '待采纳',
   success: '成功',
@@ -117,16 +118,20 @@ export const NodeShell = memo(function NodeShell({
   const updateNodeData = useWorkflowStore((s) => s.updateNodeData);
   const executeNode = useWorkflowStore((s) => s.executeNode);
   const confirmNode = useWorkflowStore((s) => s.confirmNode);
-  const confirmAndContinue = useWorkflowStore((s) => s.confirmAndContinue);
-  const runDownstream = useWorkflowStore((s) => s.runDownstream);
+  const runNode = useWorkflowStore((s) => s.runNode);
   const grabNodeAnswers = useWorkflowStore((s) => s.grabNodeAnswers);
   const updateNodeOutput = useWorkflowStore((s) => s.updateNodeOutput);
   const cancelAutoGrab = useWorkflowStore((s) => s.cancelAutoGrab);
   const allNodes = useWorkflowStore((s) => s.nodes);
-  // 节点运行按钮：既要看本节点状态，也要看全局工作流是否在跑；
-  // 否则用户在「▶ 运行工作流」中途点节点按钮会并发触发，造成"上一节点还没结束下个就开始"
+  // 节点真实状态判定：
+  //  - isRunning：本节点确实在 AI 调用中 → 显示「运行中」
+  //  - isQueued：工作流在进行中、本节点尚未开始（空闲）→ 显示「排队中」，而非误报「运行中」
+  // 这样各状态及时且准确（满足「正在运行的节点必须显示运行中」）。
   const globalRunning = useWorkflowStore((s) => s.running);
-  const running = data.status === 'running' || (globalRunning && data.status === 'idle');
+  const isRunning = data.status === 'running';
+  const isQueued = !isRunning && globalRunning && data.status === 'idle';
+  const running = isRunning || isQueued;
+  const displayStatus = isQueued ? 'queued' : data.status;
   const [grabbing, setGrabbing] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [refOpen, setRefOpen] = useState(false);
@@ -253,9 +258,9 @@ export const NodeShell = memo(function NodeShell({
           );
         })()}
         <span className="truncate">{data.label}</span>
-        <span className={`wb-node__status wb-node__status--${data.status}`}>
+        <span className={`wb-node__status wb-node__status--${displayStatus}`}>
           <span className="wb-node__dot" aria-hidden />
-          {STATUS_LABEL[data.status] ?? data.status}
+          {STATUS_LABEL[displayStatus] ?? displayStatus}
         </span>
       </div>
 
@@ -510,11 +515,17 @@ export const NodeShell = memo(function NodeShell({
           <button
             className="wb-actions__btn wb-actions__btn--run"
             disabled={running}
-            onClick={() => void runDownstream(id)}
-            title="运行本节点，并自动按拓扑顺序继续其下游（无需手动逐个点）"
+            onClick={() => void runNode(id)}
+            title={
+              isRunning
+                ? '正在运行…'
+                : isQueued
+                  ? '排队中，等待前序节点确认后再运行'
+                  : '运行本节点（不自动流转下游，跑完停在「待采纳」等你确认）'
+            }
           >
-            {running ? <StopIcon size={12} /> : <PlayIcon size={12} />}
-            {running ? '运行中…' : '运行并继续'}
+            {isRunning ? <StopIcon size={12} /> : <PlayIcon size={12} />}
+            {isRunning ? '运行中…' : isQueued ? '排队中' : '运行'}
           </button>
           {canGrab && (
             <button
@@ -534,24 +545,14 @@ export const NodeShell = memo(function NodeShell({
             </button>
           )}
           {data.status === 'reviewing' && (
-            <>
-              <button
-                className="wb-actions__btn wb-actions__btn--ok"
-                onClick={() => confirmNode(id)}
-                title="采纳当前结果（状态变为成功）"
-              >
-                <CheckIcon size={12} />
-                采纳
-              </button>
-              <button
-                className="wb-actions__btn wb-actions__btn--continue"
-                onClick={() => void confirmAndContinue(id)}
-                title="采纳当前结果，并自动运行其下游节点（按拓扑顺序继续）"
-              >
-                <ArrowClockIcon size={12} />
-                采纳并继续
-              </button>
-            </>
+            <button
+              className="wb-actions__btn wb-actions__btn--ok"
+              onClick={() => confirmNode(id)}
+              title="采纳当前结果：状态变为成功，并自动继续运行下一节点（手动确认、不自动流转）"
+            >
+              <CheckIcon size={12} />
+              采纳
+            </button>
           )}
           {data.status === 'error' && (
             <button

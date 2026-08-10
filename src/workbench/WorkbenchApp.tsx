@@ -59,6 +59,7 @@ export function WorkbenchApp() {
   const reset = useWorkflowStore((s) => s.reset);
   const load = useWorkflowStore((s) => s.load);
   const running = useWorkflowStore((s) => s.running);
+  const awaitingConfirm = useWorkflowStore((s) => s.awaitingConfirm);
   const openPanel = useWorkflowStore((s) => s.openPanel);
   const exportRun = useWorkflowStore((s) => s.exportRun);
   const panel = useWorkflowStore((s) => s.panel);
@@ -294,7 +295,7 @@ export function WorkbenchApp() {
             ) : (
               <PlayIcon size={14} />
             )}
-            {running ? '执行中…' : '运行'}
+            {running ? (awaitingConfirm ? '待确认' : '执行中…') : '运行'}
           </button>
           <button
             className="wb-toolbar__btn"

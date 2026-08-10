@@ -478,6 +478,13 @@ body,
 .wb-node__status--running .wb-node__dot {
   animation: wb-pulse 1s ease-in-out infinite;
 }
+.wb-node__status--queued {
+  background: rgba(99, 102, 241, 0.16);
+  color: #a5b4fc;
+}
+.wb-node__status--queued .wb-node__dot {
+  animation: wb-pulse 1.4s ease-in-out infinite;
+}
 .wb-node__status--success {
   background: rgba(16, 185, 129, 0.16);
   color: #34d399;

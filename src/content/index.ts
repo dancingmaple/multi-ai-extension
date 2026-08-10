@@ -1,7 +1,7 @@
 import { onBackgroundMessage } from '../shared/messaging';
 import type { ExecutePromptMessage, ProviderName, ElementRole } from '../shared/types';
 import { executePrompt } from './executor';
-import { getProviderFromUrl, resolveProviderFromUrl } from '../shared/providers';
+import { getProviderFromUrl, resolveProviderFromUrl, getProviderUrlAsync } from '../shared/providers';
 import { EMBED_MSG, isCustomProvider } from '../shared/constants';
 import { grabLocal } from './grabLocal';
 import { startPick } from './pickElement';
@@ -11,6 +11,37 @@ import { getCustomForProvider } from '../shared/customSelectors';
 
 /** 测试台里「尚未保存」的自定义网页，用这个占位 id 通信 */
 export const DRAFT_PROVIDER = 'custom:draft';
+
+/**
+ * 内嵌执行「新建会话」机制：
+ * 工作台/测试台每次在 iframe 里跑一个节点，都应从「全新对话」开始，
+ * 而不是沿用上一节点在该 iframe 里留下的会话（否则上下文会串台）。
+ * 做法：收到 EXECUTE 时，先把任务参数暂存到 sessionStorage，再把 iframe
+ * 导航到 provider 的首页（即新对话），重载后由本脚本的启动钩子从
+ * sessionStorage 取出并恢复执行——从而保证每个节点都是独立的新会话。
+ */
+const PENDING_EXEC_KEY = 'multiAI_pending_exec';
+
+async function beginEmbedExecute(msg: ExecutePromptMessage, replyTarget: Window | null): Promise<void> {
+  let url = '';
+  try {
+    url = await getProviderUrlAsync(msg.provider);
+  } catch {
+    url = '';
+  }
+  if (url) {
+    try {
+      sessionStorage.setItem(PENDING_EXEC_KEY, JSON.stringify(msg));
+    } catch {
+      /* sessionStorage 不可用时退化为直接执行（可能沿用当前会话） */
+    }
+    console.log('[MultiAI:content] 新建会话：导航到', url, 'taskId=', msg.taskId);
+    location.assign(url);
+    return;
+  }
+  // 取不到新会话地址：退化直接执行（仍沿用当前页）
+  runExecute(msg, replyTarget);
+}
 
 // 先同步认内置 7 家；随后异步补上用户自定义节点的匹配（自定义节点存在 storage 里）
 let currentProvider: ProviderName | null = getProviderFromUrl(location.href);
@@ -184,8 +215,11 @@ window.addEventListener('message', (ev: MessageEvent) => {
     const taskId = data.taskId as string | undefined;
     if (accepts(p) && p && prompt && taskId) {
       console.log('[MultiAI:content] postMessage EXECUTE for', p, 'taskId=', taskId);
-      // 通过 postMessage 把结果回传给父页面（测试台可见的 iframe 内执行）
-      runExecute({ type: 'EXECUTE_PROMPT', taskId, provider: p, prompt }, ev.source as Window | null);
+      // 内嵌执行：先新建会话（导航到 provider 首页），再执行，避免沿用上一节点会话
+      void beginEmbedExecute(
+        { type: 'EXECUTE_PROMPT', taskId, provider: p, prompt },
+        ev.source as Window | null
+      );
     }
     return;
   }
@@ -281,3 +315,21 @@ if (window.parent && window.parent !== window) {
   [200, 600, 1500, 3000, 6000].forEach((t) => setTimeout(announce, t));
   window.addEventListener('load', announce);
 }
+
+// 新建会话后，iframe 被导航重载到 provider 首页；本钩子在加载后从 sessionStorage
+// 取出暂存的待执行任务并恢复执行，结果仍回传给同一父页面（保证每个节点独立新会话）。
+(() => {
+  try {
+    if (!window.parent || window.parent === window) return; // 仅在嵌入（iframe）场景恢复
+    const raw = sessionStorage.getItem(PENDING_EXEC_KEY);
+    if (!raw) return;
+    sessionStorage.removeItem(PENDING_EXEC_KEY);
+    const msg = JSON.parse(raw) as ExecutePromptMessage;
+    if (msg && msg.type === 'EXECUTE_PROMPT' && msg.taskId && msg.provider && msg.prompt) {
+      console.log('[MultiAI:content] 恢复待执行任务（新会话已就绪）taskId=', msg.taskId);
+      runExecute(msg, window.parent);
+    }
+  } catch {
+    /* 解析失败忽略，等待下一次执行 */
+  }
+})();

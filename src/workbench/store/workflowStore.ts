@@ -41,7 +41,6 @@ import {
   buildOutputMap,
   buildVarMap,
   buildRunRecord,
-  descendants,
   joinOutputs,
   makeNode,
   sanitizeEdges,
@@ -386,6 +385,45 @@ function clearAutoGrabTimer(id: string): void {
 const executingNodes = new Set<string>();
 
 /**
+ * 工作台「待采纳」暂停链：runWorkflow 顺序执行，遇到 reviewing 节点即暂停，
+ * 把「从下一个节点继续」挂到这里；用户点击「采纳」(confirmNode) 时再恢复。
+ * 这样实现「手动确认、不自动流转」——每个 AI 节点跑完都停住等用户确认，
+ * 只有「起点/终点」这种不进 reviewing 的节点才自动流过。
+ */
+let pendingContinue: (() => Promise<void>) | null = null;
+
+/**
+ * 顺序执行 order 中从 index 起的节点：
+ *  - 遇到「待采纳(reviewing)」即暂停，把后续执行挂到 pendingContinue 后返回；
+ *  - 「起点/终点」等直接 success/error 的节点不暂停，自动继续；
+ *  - 全部跑完则收尾（running=false + 记录历史）。
+ * get/set 透传自 zustand create 闭包（模块级函数无法访问闭包变量）。
+ */
+async function runFrom(
+  index: number,
+  order: WBNode[],
+  get: () => WorkflowState,
+  set: (partial: Partial<WorkflowState>) => void
+): Promise<void> {
+  for (let i = index; i < order.length; i++) {
+    await get().executeNode(order[i].id);
+    const node = get().nodes.find((x) => x.id === order[i].id);
+    const st = node?.data.status;
+    if (st === 'reviewing') {
+      // 暂停：等待用户「采纳」后从 i+1 继续
+      pendingContinue = () => runFrom(i + 1, order, get, set);
+      set({ awaitingConfirm: true });
+      return;
+    }
+    // success / error / idle：自动继续，不暂停
+  }
+  // 全部节点跑完
+  pendingContinue = null;
+  set({ running: false, awaitingConfirm: false });
+  get().recordRun();
+}
+
+/**
  * 阶梯探测间隔（秒）：节点执行完成后若还有缺失回答（自动抓取失败），
  * 依次按 15s → 30s → 60s 自动「探测获取」，最多 3 档；每档到点调用
  * grabNodeAnswers 强制刷新，抓齐即停，全档用尽才放弃（UI 可见倒计时可取消）。
@@ -444,6 +482,8 @@ interface WorkflowState {
   nodes: WBNode[];
   edges: Edge[];
   running: boolean;
+  /** 工作流在「待采纳」处暂停、等待用户「采纳」后再继续（running 仍为真，但非正在执行） */
+  awaitingConfirm: boolean;
 
   // ── 已保存工作流（可复用库） ──
   savedWorkflows: SavedWorkflow[];
@@ -482,12 +522,12 @@ interface WorkflowState {
 
   // ── 引擎 ──
   executeNode: (id: string) => Promise<void>;
-  /** 从某节点开始运行其下游（默认含自身；「采纳并继续」时 excludeSelf 排除当前节点） */
-  runDownstream: (id: string, opts?: { excludeSelf?: boolean }) => Promise<void>;
+  /** 手动运行单个节点（不自动流转下游）；会取消正在进行的「待采纳」暂停链 */
+  runNode: (id: string) => Promise<void>;
+  /** 运行整个工作流：从入口节点开始，遇到「待采纳」节点即暂停，等待用户「采纳」后再继续 */
   runWorkflow: () => Promise<void>;
+  /** 采纳当前节点（标记成功）；若工作流正处于「待采纳」暂停中，自动继续运行下一节点 */
   confirmNode: (id: string) => void;
-  /** 采纳当前节点并自动继续运行其下游节点（「采纳并继续」） */
-  confirmAndContinue: (id: string) => Promise<void>;
   /** 手动兜底：重新从各家标签页读屏，挽回自动抓取失败的回答 */
   grabNodeAnswers: (id: string) => Promise<void>;
 
@@ -534,6 +574,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   nodes: [],
   edges: [],
   running: false,
+  awaitingConfirm: false,
   savedWorkflows: [],
   presetWorkflows: [builtinPreset()],
   runHistory: [],
@@ -595,15 +636,22 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
   confirmNode: (id) => {
     const node = get().nodes.find((n) => n.id === id);
-    if (node && node.data.status === 'reviewing') {
+    if (node && (node.data.status === 'reviewing' || node.data.status === 'success')) {
       get().updateNodeData(id, { status: 'success' });
+    }
+    // 若工作流在「待采纳」处暂停，用户点击「采纳」即继续往下跑
+    if (pendingContinue) {
+      const cont = pendingContinue;
+      pendingContinue = null;
+      set({ awaitingConfirm: false });
+      void cont();
     }
   },
 
-  /** 采纳当前节点并自动继续运行其下游节点（「采纳并继续」） */
-  confirmAndContinue: async (id) => {
-    get().confirmNode(id);
-    await get().runDownstream(id, { excludeSelf: true });
+  /** 手动运行单个节点：取消进行中的暂停链，避免与自动流程冲突 */
+  runNode: async (id) => {
+    pendingContinue = null;
+    await get().executeNode(id);
   },
 
   grabNodeAnswers: async (id) => {
@@ -808,50 +856,6 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     }
   },
 
-  runDownstream: async (id, opts?: { excludeSelf?: boolean }) => {
-    // 运行前重置：把本次涉及的节点恢复为 idle、清空旧错误/残留自动获取倒计时，
-    // 并**清空上一轮运行产物**（outputs/output/urls/tabIds/taskId），
-    // 让界面一开始就是干净的，绝不残留上次的结果。
-    const order = topoOrder(get().nodes, get().edges);
-    const desc = descendants(id, get().edges);
-    // 默认包含起始节点自身（「从此节点开始重跑」）；「采纳并继续」时排除自身
-    const targets = new Set(
-      [...desc].filter((nid) => (opts?.excludeSelf ? nid !== id : true))
-    );
-    const seq = order.filter((n) => targets.has(n.id));
-    for (const n of seq) clearAutoGrabTimer(n.id);
-    set({
-      nodes: get().nodes.map((n) =>
-        targets.has(n.id)
-          ? {
-              ...n,
-              data: {
-                ...n.data,
-                status: 'idle' as NodeStatus,
-                error: undefined,
-                autoGrabAt: undefined,
-                probeStage: undefined,
-                outputs: {},
-                output: '',
-                urls: undefined,
-                tabIds: undefined,
-                taskId: undefined,
-              },
-            }
-          : n
-      ),
-    });
-    set({ running: true });
-    try {
-      for (const n of seq) {
-        await get().executeNode(n.id);
-      }
-    } finally {
-      set({ running: false });
-      get().recordRun();
-    }
-  },
-
   runWorkflow: async () => {
     // 运行前重置全部节点：清除旧状态/错误/残留自动获取定时器，并**清空上一轮运行产物**，
     // 保证本次运行一开始界面就是干净的（不显示上一轮的任何结果）。
@@ -874,15 +878,12 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       })),
     });
     const order = topoOrder(get().nodes, get().edges);
-    set({ running: true });
-    try {
-      for (const n of order) {
-        await get().executeNode(n.id);
-      }
-    } finally {
-      set({ running: false });
-      get().recordRun();
-    }
+    // 取消任何残留的暂停链，从头开始
+    pendingContinue = null;
+    set({ running: true, awaitingConfirm: false });
+    // runFrom 会在遇到「待采纳」节点时暂停（running 保持 true，等待用户「采纳」），
+    // 跑完所有节点后再把 running 置回 false 并记录历史。
+    await runFrom(0, order, get, set);
   },
 
   load: async () => {
