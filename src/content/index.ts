@@ -329,10 +329,13 @@ window.addEventListener('message', (ev: MessageEvent) => {
 // 主动向父页面广播「我已就绪」：避免父页面 PING 早于 content script 注入的竞态
 // （这正是「第一次发送没反应、第二次才正常」的根因之一）。
 if (window.parent && window.parent !== window) {
+  // 就绪广播：立即广播一次（常规情况下父页面尚未开始 PING）；
+  // 其余就绪通知由「父页面主动 PING 时回 PONG」覆盖（见上方 message 监听），
+  // 不再用固定 5 个 setTimeout 反复重发，避免无意义计时器堆积（#48）。
   const announce = () =>
     replyTo(window.parent, { __multiAi: EMBED_MSG.READY, provider: effectiveProvider() });
   announce();
-  [200, 600, 1500, 3000, 6000].forEach((t) => setTimeout(announce, t));
+  window.addEventListener('DOMContentLoaded', announce);
   window.addEventListener('load', announce);
 }
 

@@ -227,9 +227,20 @@ export class GeminiAdapter extends BaseAdapter {
       const qlEditor = el.closest('.ql-editor') || (el.classList.contains('ql-editor') ? el : null);
       if (qlEditor) {
         try {
-          qlEditor.innerHTML = '<p>' + prompt.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '</p><p>') + '</p><p><br></p>';
+          // 用 DOM API 构造段落节点：textContent 天然防注入，且 split(/\r\n|\r|\n/)
+          // 正确处理 Windows 换行，不再用字符串拼接 innerHTML（#64）
+          qlEditor.replaceChildren();
+          const paras = prompt.split(/\r\n|\r|\n/);
+          for (const para of paras) {
+            const p = document.createElement('p');
+            p.textContent = para;
+            qlEditor.appendChild(p);
+          }
+          const tail = document.createElement('p');
+          tail.appendChild(document.createElement('br'));
+          qlEditor.appendChild(tail);
           written = true;
-          gLog('Method 3 (Quill innerHTML) applied');
+          gLog('Method 3 (Quill DOM nodes) applied');
         } catch {
           console.warn('[Gemini:adapter] Method 3 failed');
         }

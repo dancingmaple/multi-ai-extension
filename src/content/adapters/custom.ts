@@ -111,13 +111,16 @@ export class CustomAdapter extends BaseAdapter {
   }
 
   override async waitForReady(timeoutMs?: number): Promise<void> {
-    const timeout = timeoutMs ?? this.getElementTimeout();
-    const t0 = Date.now();
-    while (Date.now() - t0 < timeout) {
-      if (this.findInput()) return;
-      await sleep(300);
+    // 复用基类 waitForReady（基于 MutationObserver/rAF 等待输入框出现），
+    // 不再自写 sleep(300) 轮询（#47）。失败时给出贴合自定义站点语义的提示。
+    try {
+      await super.waitForReady(timeoutMs);
+    } catch {
+      throw new SubmitFailedError(
+        this.provider,
+        '自定义站点：等待输入框超时（' + (timeoutMs ?? this.getElementTimeout()) + 'ms），请重新点选输入框'
+      );
     }
-    throw new Error('自定义站点：等待输入框超时（' + timeout + 'ms），请重新点选输入框');
   }
 
   override detectLoginRequired(): boolean {

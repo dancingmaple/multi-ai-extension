@@ -179,15 +179,19 @@ function grabInPage(args: { prompt: string; provider?: string }): { text: string
     // 极端情况：裁完太短，退化为通用剪刀法（用 blockText 的全文，不会截断）
   }
 
-  const key = (args.prompt || '').replace(/\s/g, '').slice(0, 12);
+  // key 加长到 32 字符（#58）：短问题（slice(0,12)）极易在正文偶然命中，误把后面
+  // 整段回答当提问裁掉；优先匹配「用户：/你：/You:」等提问前缀行更可信。
+  const key = (args.prompt || '').replace(/\s/g, '').slice(0, 32);
   let q = -1;
-  if (key)
+  if (key) {
+    const USER_PREFIX_RE = /^(用户|你|我|问|Q|You|User)[:：]|^>\s/;
     for (let i = lines.length - 1; i >= 0; i--) {
       if (lines[i].replace(/\s/g, '').includes(key)) {
-        q = i;
-        break;
+        q = i; // 命中即记录；优先保留更靠后且带提问前缀的
+        if (USER_PREFIX_RE.test(lines[i])) break;
       }
     }
+  }
   if (q >= 0 && q < lines.length - 1) {
     const rawBody = lines.slice(q + 1);
     const stopIdx = findStopIndex(rawBody);

@@ -44,14 +44,17 @@ export function extractAnswer(pageText: string, prompt: string): GrabResult {
     return arr;
   };
 
-  // 1) 剪刀法：从后定位最后一次提问，取其后
-  const key = (prompt || '').replace(/\s/g, '').slice(0, 12);
+  // 1) 剪刀法：从后定位最后一次提问，取其后。
+  // key 加长到 32 字符（#58）：短问题（slice(0,12)）极易在正文偶然命中，
+  // 误把后面整段回答当提问裁掉；优先匹配「用户：/你：/You:」等提问前缀行更可信。
+  const key = (prompt || '').replace(/\s/g, '').slice(0, 32);
   let q = -1;
   if (key) {
+    const USER_PREFIX_RE = /^(用户|你|我|问|Q|You|User)[:：]|^>\s/;
     for (let i = lines.length - 1; i >= 0; i--) {
       if (lines[i].replace(/\s/g, '').includes(key)) {
-        q = i;
-        break;
+        q = i; // 命中即记录；优先保留更靠后且带提问前缀的
+        if (USER_PREFIX_RE.test(lines[i])) break;
       }
     }
   }
