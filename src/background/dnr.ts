@@ -19,9 +19,16 @@ const RULE_PRIORITY = 1;
  * 2) 拆成两条规则：XFO 一条、CSP 一条。多数站点仅靠 XFO 拦截嵌套，
  *    将来确认某站点无需动 CSP 时，可单独把它从 CSP 规则里摘掉；
  * 3) 不动 Content-Security-Policy-Report-Only，保留站点的违规上报。
+ *
+ * ⚠️ 规则 id 分配（避免与 customSite.ts 的动态规则冲突，详见 #44 回归）：
+ *   - 1001：本文件 XFO 剥离（内置站点）
+ *   - 1002：customSite.ts 的 CUSTOM_DNR_RULE_ID（自定义站点 XFO+CSP）—— 已占用，禁止复用
+ *   - 1003：本文件 CSP 剥离（内置站点）
+ *   早期把 CSP_RULE_ID 误设为 1002，被 customSite 的 updateDynamicRules 覆盖，
+ *   导致内置站点 CSP frame-ancestors 未被剥离、iframe 直接被浏览器拒绝嵌套。
  */
 const XFO_RULE_ID = 1001;
-const CSP_RULE_ID = 1002;
+const CSP_RULE_ID = 1003; // 注意：1002 已被 customSite.CUSTOM_DNR_RULE_ID 占用，不可复用
 
 function buildRules(): chrome.declarativeNetRequest.Rule[] {
   const condition = {
