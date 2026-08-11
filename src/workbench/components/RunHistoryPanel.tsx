@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useWorkflowStore } from '../store/workflowStore';
 import { buildRunMarkdown, runStatusLabel } from '../utils/export';
 import { HistoryIcon, CloseIcon, CopyIcon, DownloadIcon, CheckIcon, ArrowLeftIcon, ArrowRightIcon } from './icons';
+import { ConfirmDialog } from './ConfirmDialog';
 
 export function RunHistoryPanel() {
   const history = useWorkflowStore((s) => s.runHistory);
@@ -17,6 +18,7 @@ export function RunHistoryPanel() {
 
   const [detailId, setDetailId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
 
   const detail = useMemo(
     () => history.find((r) => r.id === detailId) ?? null,
@@ -27,13 +29,15 @@ export function RunHistoryPanel() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        // 确认弹层打开时，Esc 交由 ConfirmDialog 处理
+        if (confirmClear) return;
         if (detailId) setDetailId(null);
         else closePanel();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [closePanel, detailId]);
+  }, [closePanel, detailId, confirmClear]);
 
   const copyMd = async () => {
     try {
@@ -130,7 +134,7 @@ export function RunHistoryPanel() {
             <button
               className="wb-btn wb-btn--sm wb-btn--danger"
               onClick={() => {
-                if (history.length && confirm('确定清空全部运行历史？')) clearRunHistory();
+                if (history.length) setConfirmClear(true);
               }}
             >
               清空历史
@@ -139,6 +143,20 @@ export function RunHistoryPanel() {
           </div>
         )}
       </div>
+
+      {confirmClear && (
+        <ConfirmDialog
+          title="清空运行历史"
+          message="确定清空全部运行历史？此操作不可撤销。"
+          confirmText="清空"
+          danger
+          onConfirm={() => {
+            clearRunHistory();
+            setConfirmClear(false);
+          }}
+          onCancel={() => setConfirmClear(false)}
+        />
+      )}
     </div>
   );
 }

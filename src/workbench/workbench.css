@@ -1104,6 +1104,52 @@ textarea.wb-input {
   color: #7d8aa0;
 }
 
+/* 自定义确认弹层（替代原生 confirm） */
+.wb-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 6, 15, 0.66);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+  animation: wb-fade 0.15s ease;
+}
+.wb-confirm {
+  background: #111a2e;
+  color: #e5e9f0;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 12px;
+  width: 400px;
+  max-width: 92vw;
+  box-shadow: 0 24px 70px rgba(2, 6, 18, 0.7);
+  animation: wb-pop 0.16s ease;
+}
+.wb-confirm__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 18px;
+  font-weight: 700;
+  font-size: 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+.wb-confirm__body {
+  padding: 16px 18px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #c6d0e0;
+}
+.wb-confirm__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 11px 18px;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+
 /* 保存表单 */
 .wb-save-form {
   display: flex;

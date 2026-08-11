@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react';
 import { useWorkflowStore } from '../store/workflowStore';
 import { SaveIcon, CloseIcon } from './icons';
+import { ConfirmDialog } from './ConfirmDialog';
 
 export function SavedWorkflowsPanel() {
   const saved = useWorkflowStore((s) => s.savedWorkflows);
@@ -17,14 +18,19 @@ export function SavedWorkflowsPanel() {
   const [name, setName] = useState('');
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameVal, setRenameVal] = useState('');
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closePanel();
+      if (e.key === 'Escape') {
+        // 确认弹层打开时，Esc 交由 ConfirmDialog 处理，避免连层面板一起关掉
+        if (confirmDeleteId) return;
+        closePanel();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [closePanel]);
+  }, [closePanel, confirmDeleteId]);
 
   const handleSave = async () => {
     await saveWorkflowAs(name);
@@ -109,9 +115,7 @@ export function SavedWorkflowsPanel() {
                     </button>
                     <button
                       className="wb-btn wb-btn--sm wb-btn--danger"
-                      onClick={() => {
-                        if (confirm(`确定删除工作流「${w.name}」？`)) void deleteSavedWorkflow(w.id);
-                      }}
+                      onClick={() => setConfirmDeleteId(w.id)}
                     >
                       删除
                     </button>
@@ -123,6 +127,20 @@ export function SavedWorkflowsPanel() {
         </div>
         <div className="wb-modal__foot">双击标题也可快速重命名。</div>
       </div>
+
+      {confirmDeleteId && (
+        <ConfirmDialog
+          title="删除工作流"
+          message={`确定删除工作流「${saved.find((x) => x.id === confirmDeleteId)?.name ?? ''}」？此操作不可撤销。`}
+          confirmText="删除"
+          danger
+          onConfirm={() => {
+            void deleteSavedWorkflow(confirmDeleteId);
+            setConfirmDeleteId(null);
+          }}
+          onCancel={() => setConfirmDeleteId(null)}
+        />
+      )}
     </div>
   );
 }
