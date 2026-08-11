@@ -6,44 +6,37 @@ const MENU_ID = 'open-workbench';
 const TEST_MENU_ID = 'open-link-test';
 const SIDEPANEL_MENU_ID = 'open-sidepanel-fullscreen';
 
-export function setupContextMenu(): void {
-  chrome.runtime.onInstalled.addListener(() => {
+const MENU_ITEMS: { id: string; title: string }[] = [
+  { id: MENU_ID, title: '🧠 打开 AI 工作台 (全屏)' },
+  { id: SIDEPANEL_MENU_ID, title: '📐 打开侧边栏页面 (全屏)' },
+  { id: TEST_MENU_ID, title: '⚡ 打开请求链路测试台' },
+];
+
+function createMenus(): void {
+  for (const item of MENU_ITEMS) {
     chrome.contextMenus.create(
       {
-        id: MENU_ID,
-        title: '🧠 打开 AI 工作台 (全屏)',
+        id: item.id,
+        title: item.title,
         contexts: ['action'], // 右键点击工具栏插件图标时显示
       },
       () => {
         if (chrome.runtime.lastError) {
-          console.warn('[MultiAI:contextMenu] create failed:', chrome.runtime.lastError.message);
+          console.warn(`[MultiAI:contextMenu] create ${item.id} failed:`, chrome.runtime.lastError.message);
         }
       }
     );
-    chrome.contextMenus.create(
-      {
-        id: SIDEPANEL_MENU_ID,
-        title: '📐 打开侧边栏页面 (全屏)',
-        contexts: ['action'],
-      },
-      () => {
-        if (chrome.runtime.lastError) {
-          console.warn('[MultiAI:contextMenu] create sidepanel menu failed:', chrome.runtime.lastError.message);
-        }
-      }
-    );
-    chrome.contextMenus.create(
-      {
-        id: TEST_MENU_ID,
-        title: '⚡ 打开请求链路测试台',
-        contexts: ['action'],
-      },
-      () => {
-        if (chrome.runtime.lastError) {
-          console.warn('[MultiAI:contextMenu] create test menu failed:', chrome.runtime.lastError.message);
-        }
-      }
-    );
+  }
+}
+
+export function setupContextMenu(): void {
+  chrome.runtime.onInstalled.addListener(() => {
+    // 先清空再重建（#45）：菜单项由浏览器持久化，扩展更新后若菜单项增删或改名，
+    // 旧项会残留；对同一 id 重复 create 还会报 "duplicate id" 而静默失败。
+    chrome.contextMenus.removeAll(() => {
+      void chrome.runtime.lastError; // removeAll 失败不阻断重建
+      createMenus();
+    });
   });
 
   chrome.contextMenus.onClicked.addListener((info) => {

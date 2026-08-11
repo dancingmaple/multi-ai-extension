@@ -17,6 +17,34 @@ import { sleep } from '../shared/utils';
 // ─────────────────────────────────────────────────────────────
 const WB_TAB_REGISTRY_KEY = 'wb_tab_registry_v1';
 const nodeProviderTabs = new Map<string, number>();
+// tabId → 登记表 key 的反向索引（#63）。
+// 标签页关闭事件很频繁（用户开关任意 tab 都会触发），原先每次都要遍历
+// 整张登记表；这里用反向索引把清理降到 O(1)。
+const tabToKeys = new Map<number, Set<string>>();
+
+/** 唯一的写入口：同时维护正向表与反向索引 */
+function setRegistryEntry(key: string, tabId: number): void {
+  deleteRegistryEntry(key);
+  nodeProviderTabs.set(key, tabId);
+  let keys = tabToKeys.get(tabId);
+  if (!keys) {
+    keys = new Set();
+    tabToKeys.set(tabId, keys);
+  }
+  keys.add(key);
+}
+
+/** 唯一的删除入口：同时维护正向表与反向索引 */
+function deleteRegistryEntry(key: string): void {
+  const old = nodeProviderTabs.get(key);
+  if (old === undefined) return;
+  nodeProviderTabs.delete(key);
+  const keys = tabToKeys.get(old);
+  if (keys) {
+    keys.delete(key);
+    if (keys.size === 0) tabToKeys.delete(old);
+  }
+}
 // 同 (nodeId,provider) 并发请求去重：避免「快速二次触发」各 create 一张 tab，
 // 后写覆盖登记表 → 先创建的 tab 永不复用也不清理（孤儿 tab）。(#17)
 const inflightTabs = new Map<string, Promise<number>>();
@@ -43,7 +71,7 @@ export async function loadTabRegistry(): Promise<void> {
     const obj = res[WB_TAB_REGISTRY_KEY] as Record<string, number> | undefined;
     if (obj && typeof obj === 'object') {
       for (const [k, v] of Object.entries(obj)) {
-        if (typeof v === 'number') nodeProviderTabs.set(k, v);
+        if (typeof v === 'number') setRegistryEntry(k, v);
       }
       console.log('[MultiAI:tabManager] 已从存储恢复标签页登记表', nodeProviderTabs.size, '条');
     }
@@ -61,16 +89,12 @@ export function getRegisteredTabId(
   return nodeProviderTabs.get(registryKey(nodeId, provider));
 }
 
-/** 标签页被用户关闭时，从登记表移除，避免复用死 tab */
+/** 标签页被用户关闭时，从登记表移除，避免复用死 tab（走反向索引，O(1)） */
 chrome.tabs.onRemoved.addListener((tabId) => {
-  let changed = false;
-  for (const [key, id] of nodeProviderTabs.entries()) {
-    if (id === tabId) {
-      nodeProviderTabs.delete(key);
-      changed = true;
-    }
-  }
-  if (changed) persistRegistry();
+  const keys = tabToKeys.get(tabId);
+  if (!keys || keys.size === 0) return;
+  for (const key of [...keys]) deleteRegistryEntry(key);
+  persistRegistry();
 });
 
 export async function getOrCreateProviderTab(
@@ -102,13 +126,13 @@ export async function getOrCreateProviderTab(
               }
             } catch {
               // 标签页已失效（被关/崩溃）：从登记表移除并重建
-              nodeProviderTabs.delete(key);
+              deleteRegistryEntry(key);
               persistRegistry();
             }
           }
           // 还没有专属 tab：新开并登记
           const tabId = await createProviderTab(provider);
-          nodeProviderTabs.set(key, tabId);
+          setRegistryEntry(key, tabId);
           persistRegistry();
           console.log('[MultiAI:tabManager] 新建并登记节点专属 tab', tabId, 'for', key);
           return tabId;

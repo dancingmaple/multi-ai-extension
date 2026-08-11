@@ -390,9 +390,19 @@ export async function manualGrabAll(
   prompt: string,
   providers: ProviderName[]
 ): Promise<GrabOutcome[]> {
-  const outs: GrabOutcome[] = [];
-  for (const p of providers) {
-    outs.push(await manualGrab(conversationId, turnId, p, prompt));
-  }
-  return outs;
+  // 各 provider 在不同标签页里抓取，互不影响 → 并行（#43）。
+  // 原先 for-await 串行，N 家的耗时线性叠加（每家最坏数秒）。
+  // 用 allSettled 保证个别家抛错不会让整批失败。
+  const settled = await Promise.allSettled(
+    providers.map((p) => manualGrab(conversationId, turnId, p, prompt))
+  );
+  return settled.map((r, i) =>
+    r.status === 'fulfilled'
+      ? r.value
+      : {
+          provider: providers[i],
+          ok: false,
+          error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+        }
+  );
 }
