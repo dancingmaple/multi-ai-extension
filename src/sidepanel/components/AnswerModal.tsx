@@ -62,7 +62,8 @@ const AnswerModal: React.FC = () => {
     return task?.providers[provider]?.url;
   })();
 
-  const html = renderMarkdown(content);
+  // 流式期间每 token 重渲染，markdown 渲染较重 → 仅 content 变化时重算（#56）
+  const html = useMemo(() => renderMarkdown(content), [content]);
 
   const onContextMenu = (e: React.MouseEvent) => e.preventDefault();
 

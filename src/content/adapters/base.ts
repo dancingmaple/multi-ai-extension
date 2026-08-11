@@ -71,18 +71,26 @@ export abstract class BaseAdapter implements SiteAdapter {
   }
 
   detectLoginRequired(): boolean {
+    // 1) 选择器命中（登录表单 / 按钮）
     for (const sel of this.loginSelectors) {
-      const el = document.querySelector(sel);
-      if (el) return true;
+      if (document.querySelector(sel)) return true;
     }
+    // 2) 文本模式：忽略大小写与空白，避免 '登录 Google' / 多空格漏判（#26）
     if (this.loginTextPatterns.length > 0) {
       const buttons = document.querySelectorAll('button, a');
       for (const btn of buttons) {
-        const text = btn.textContent?.trim() ?? '';
+        const text = (btn.textContent ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
         for (const pattern of this.loginTextPatterns) {
-          if (text === pattern) return true;
+          if (text.includes(pattern.toLowerCase())) return true;
         }
       }
+    }
+    // 3) href 含登录入口：严格正则，避免 '/docs/login-guide' 误判为登录页（#26）
+    const loginHrefRe = /(^|\/)(login|signin|sign-in|auth|oauth)(\/|$|\?|#)/i;
+    const links = document.querySelectorAll('a[href]');
+    for (const a of links) {
+      const href = a.getAttribute('href') ?? '';
+      if (loginHrefRe.test(href)) return true;
     }
     return false;
   }

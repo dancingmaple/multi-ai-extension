@@ -10,23 +10,39 @@ import type { CustomProvider, CustomProviderMap, ProviderName } from './types';
  * 存储结构：{ 'custom:1754800000000': CustomProvider, ... }
  */
 
+// 内存缓存：content script 解析 provider / useEffectiveProviders 频繁读盘，
+// 缓存 + storage.onChanged 失效避免每次状态变更都全量读盘（#28）。
+let cachePromise: Promise<CustomProviderMap> | undefined;
+
 export async function loadCustomProviders(): Promise<CustomProviderMap> {
-  try {
-    const r = await chrome.storage.local.get(CUSTOM_PROVIDERS_KEY);
-    const m = r[CUSTOM_PROVIDERS_KEY];
-    if (m && typeof m === 'object') return m as CustomProviderMap;
-  } catch {
-    /* storage 不可用时返回空 */
-  }
-  return {};
+  if (cachePromise) return cachePromise;
+  cachePromise = (async () => {
+    try {
+      const r = await chrome.storage.local.get(CUSTOM_PROVIDERS_KEY);
+      const m = r[CUSTOM_PROVIDERS_KEY];
+      if (m && typeof m === 'object') return m as CustomProviderMap;
+    } catch {
+      /* storage 不可用时返回空 */
+    }
+    return {};
+  })();
+  return cachePromise;
 }
 
 export async function saveCustomProviders(map: CustomProviderMap): Promise<void> {
+  cachePromise = undefined; // 写入后失效缓存，下次读取重新加载最新值
   try {
     await chrome.storage.local.set({ [CUSTOM_PROVIDERS_KEY]: map });
   } catch {
     /* ignore */
   }
+}
+
+// 外部（如测试台）改了自定义节点 → 让本上下文缓存失效（#28）
+if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes[CUSTOM_PROVIDERS_KEY]) cachePromise = undefined;
+  });
 }
 
 export async function getCustomProvider(id: ProviderName): Promise<CustomProvider | null> {

@@ -14,21 +14,25 @@ export async function getProviderUrlAsync(provider: ProviderName): Promise<strin
   return c?.url ?? '';
 }
 
+// 由 PROVIDER_URLS 反查构建 hostname→provider 映射（#53），避免与 constants 重复维护。
+const BUILTIN_HOST_MAP: Record<string, ProviderName> = (() => {
+  const m: Record<string, ProviderName> = {};
+  for (const [p, u] of Object.entries(PROVIDER_URLS)) {
+    try {
+      m[new URL(u).hostname] = p as ProviderName;
+    } catch {
+      /* 非法 url 跳过 */
+    }
+  }
+  return m;
+})();
+
 export function getProviderFromUrl(url: string): ProviderName | null {
-  let hostname = '';
   try {
-    hostname = new URL(url).hostname;
+    return BUILTIN_HOST_MAP[new URL(url).hostname] ?? null;
   } catch {
     return null;
   }
-  if (hostname.includes('chatgpt.com')) return 'chatgpt';
-  if (hostname.includes('gemini.google.com')) return 'gemini';
-  if (hostname.includes('deepseek.com')) return 'deepseek';
-  if (hostname.includes('qwen.ai')) return 'qwen';
-  if (hostname.includes('z.ai')) return 'zai';
-  if (hostname.includes('doubao.com')) return 'doubao';
-  if (hostname.includes('moonshot.cn') || hostname.includes('kimi.com')) return 'kimi';
-  return null;
 }
 
 /**

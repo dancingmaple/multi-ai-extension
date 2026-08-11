@@ -40,6 +40,13 @@ export function clearSettingsCache(): void {
   cachedSettings = null;
 }
 
+// 设置变更时让缓存自动失效，用户改 settings 无需重载扩展即可生效（#25）
+if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes[SETTINGS_KEY]) cachedSettings = null;
+  });
+}
+
 /**
  * 取适配器：内置 7 家用专属适配器；`custom:` 开头的自定义节点
  * 用通用 CustomAdapter，选择器来自用户点选后保存的记录。

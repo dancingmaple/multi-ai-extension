@@ -56,17 +56,20 @@ export const ERROR_CODES = {
 // ── 嵌入视图（把 AI 网页放进插件 iframe） ──────────────
 // 这些域名在 sub_frame 请求时会被 DNR 规则剥离 X-Frame-Options /
 // Content-Security-Policy，从而允许被插件页 iframe 嵌套。
-export const EMBED_HOSTS: string[] = [
-  'chatgpt.com',
-  'gemini.google.com',
-  'chat.deepseek.com',
-  'deepseek.com',
-  'chat.qwen.ai',
-  'chat.z.ai',
-  'www.doubao.com',
-  'kimi.moonshot.cn',
-  'kimi.com',
-];
+// 由 PROVIDER_URLS 派生，新增 provider 只需改一处，避免两边漏配（#52）。
+export const EMBED_HOSTS: string[] = Array.from(
+  new Set(
+    Object.values(PROVIDER_URLS)
+      .map((u) => {
+        try {
+          return new URL(u).hostname;
+        } catch {
+          return '';
+        }
+      })
+      .filter(Boolean)
+  )
+);
 
 // 父页面（插件）↔ iframe 内 content script 的跨域通信协议
 export const EMBED_MSG = {

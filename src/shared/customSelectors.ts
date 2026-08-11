@@ -7,23 +7,39 @@ import type { CustomSelectorMap, ProviderCustomSelectors, ProviderName } from '.
  * 选择器写入 chrome.storage.local，后续执行时优先使用。
  */
 
+// 内存缓存：content script 流式期间反复读取手动修复的选择器，
+// 缓存 + storage.onChanged 失效避免每次都全量读盘（#28）。
+let cachePromise: Promise<CustomSelectorMap> | undefined;
+
 export async function loadCustomSelectors(): Promise<CustomSelectorMap> {
-  try {
-    const r = await chrome.storage.local.get(CUSTOM_SELECTORS_KEY);
-    const m = r[CUSTOM_SELECTORS_KEY];
-    if (m && typeof m === 'object') return m as CustomSelectorMap;
-  } catch {
-    /* storage 不可用时返回空 */
-  }
-  return {};
+  if (cachePromise) return cachePromise;
+  cachePromise = (async () => {
+    try {
+      const r = await chrome.storage.local.get(CUSTOM_SELECTORS_KEY);
+      const m = r[CUSTOM_SELECTORS_KEY];
+      if (m && typeof m === 'object') return m as CustomSelectorMap;
+    } catch {
+      /* storage 不可用时返回空 */
+    }
+    return {};
+  })();
+  return cachePromise;
 }
 
 export async function saveCustomSelectors(map: CustomSelectorMap): Promise<void> {
+  cachePromise = undefined; // 写入后失效缓存
   try {
     await chrome.storage.local.set({ [CUSTOM_SELECTORS_KEY]: map });
   } catch {
     /* ignore */
   }
+}
+
+// 外部改了自定义选择器 → 让本上下文缓存失效（#28）
+if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes[CUSTOM_SELECTORS_KEY]) cachePromise = undefined;
+  });
 }
 
 export async function getCustomForProvider(provider: ProviderName): Promise<ProviderCustomSelectors | null> {

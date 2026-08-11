@@ -1,4 +1,4 @@
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { useStore } from '../store';
 import type { ProviderName } from '../../shared/types';
 import { useEffectiveProviders } from '../../shared/useEffectiveProviders';
@@ -16,6 +16,14 @@ const PromptInput: React.FC = () => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const effective = useEffectiveProviders();
+
+  // 文本框随内容自动增高（#57）
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 240) + 'px';
+  }, [prompt]);
 
   const handleSend = useCallback(() => {
     if (viewMode === 'web') {
