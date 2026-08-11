@@ -7,6 +7,7 @@ import type {
   ExportMarkdownMessage,
 } from '../shared/types';
 import { broadcastTaskState } from '../shared/messaging';
+import { withStorageLock } from '../shared/concurrency';
 import {
   createTask,
   getTask,
@@ -65,7 +66,8 @@ function persistStream(taskId: string, task: AskTaskState, force = false): void 
   }
   const providers: Record<string, { content: string; status: string }> = {};
   for (const [p, ps] of Object.entries(task.providers)) providers[p] = { content: ps.content, status: ps.status };
-  chrome.storage.local.get('studio_laststream').then((r) => {
+  void withStorageLock('studio_laststream', async () => {
+    const r = await chrome.storage.local.get('studio_laststream');
     const m = (r.studio_laststream || {}) as Record<
       string,
       { prompt: string; providers: Record<string, { content: string; status: string }>; updatedAt: number }
@@ -76,7 +78,7 @@ function persistStream(taskId: string, task: AskTaskState, force = false): void 
       .slice(0, 5);
     const pruned: Record<string, unknown> = {};
     keys.forEach((k) => (pruned[k] = m[k]));
-    chrome.storage.local.set({ studio_laststream: pruned }).catch(() => {});
+    await chrome.storage.local.set({ studio_laststream: pruned });
   }).catch(() => {});
 }
 
@@ -107,12 +109,14 @@ async function saveToHistory(task: AskTaskState): Promise<void> {
     };
   }
 
-  const result = await chrome.storage.local.get(HISTORY_KEY);
-  const history: HistoryEntry[] = result[HISTORY_KEY] || [];
-  const filtered = history.filter((h) => h.id !== entry.id);
-  filtered.unshift(entry);
-  const trimmed = filtered.slice(0, MAX_HISTORY);
-  await chrome.storage.local.set({ [HISTORY_KEY]: trimmed });
+  await withStorageLock(HISTORY_KEY, async () => {
+    const result = await chrome.storage.local.get(HISTORY_KEY);
+    const history: HistoryEntry[] = result[HISTORY_KEY] || [];
+    const filtered = history.filter((h) => h.id !== entry.id);
+    filtered.unshift(entry);
+    const trimmed = filtered.slice(0, MAX_HISTORY);
+    await chrome.storage.local.set({ [HISTORY_KEY]: trimmed });
+  });
 }
 
 function providersAllDone(task: AskTaskState): boolean {

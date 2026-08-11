@@ -54,9 +54,17 @@ async function grantedOrigins(urls: string[]): Promise<string[]> {
   return [...new Set(out)];
 }
 
+/** 进行中的同步 Promise：并发调用复用同一实例，避免 unregister/register 交错（#21） */
+let syncPromise: Promise<{ origins: string[]; hosts: string[] }> | undefined;
+
 /** 读取全部自定义节点，同步 DNR 规则 + 动态 content script 注册 */
 export async function syncCustomSites(): Promise<{ origins: string[]; hosts: string[] }> {
-  const map = await loadCustomProviders();
+  // 防并发：storage 变更 / 权限变更可能几乎同时触发多次；复用进行中的同步，
+  // 否则一次 unregister 与另一次 register 交错会让脚本处于「未注册 / 过期集合」状态（#21）
+  if (syncPromise) return syncPromise;
+  syncPromise = (async () => {
+    try {
+      const map = await loadCustomProviders();
   const urls = Object.values(map).map((c) => c.url).filter(Boolean);
   const origins = await grantedOrigins(urls);
   const hosts = [...new Set(origins.map((o) => hostOf(o)).filter((h): h is string => !!h))];
@@ -113,7 +121,12 @@ export async function syncCustomSites(): Promise<{ origins: string[]; hosts: str
     console.warn('[MultiAI:customSite] registerContentScripts failed:', e);
   }
 
-  return { origins, hosts };
+      return { origins, hosts };
+    } finally {
+      syncPromise = undefined;
+    }
+  })();
+  return syncPromise;
 }
 
 /** 启动时同步一次；storage 变更时自动重同步 */

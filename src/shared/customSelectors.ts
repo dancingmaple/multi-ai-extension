@@ -1,5 +1,6 @@
 import { CUSTOM_SELECTORS_KEY } from './constants';
 import type { CustomSelectorMap, ProviderCustomSelectors, ProviderName } from './types';
+import { withStorageLock } from './concurrency';
 
 /**
  * 手动修复的元素选择器永久存储。
@@ -47,33 +48,41 @@ export async function getCustomForProvider(provider: ProviderName): Promise<Prov
   return map[provider] ?? null;
 }
 
-/** 合并写入某 provider 的单个角色选择器，返回更新后的完整 map */
+/** 合并写入某 provider 的单个角色选择器，返回更新后的完整 map（读-改-写加锁 #8） */
 export async function upsertCustomSelector(
   provider: ProviderName,
   role: 'input' | 'submit' | 'response',
   selector: string
 ): Promise<CustomSelectorMap> {
-  const map = await loadCustomSelectors();
-  const cur = map[provider] ?? {};
-  cur[role] = selector;
-  map[provider] = cur;
-  await saveCustomSelectors(map);
-  return map;
+  return withStorageLock(CUSTOM_SELECTORS_KEY, async () => {
+    const r = await chrome.storage.local.get(CUSTOM_SELECTORS_KEY);
+    const base = r[CUSTOM_SELECTORS_KEY];
+    const map: CustomSelectorMap = base && typeof base === 'object' ? (base as CustomSelectorMap) : {};
+    const cur = map[provider] ?? {};
+    cur[role] = selector;
+    map[provider] = cur;
+    await saveCustomSelectors(map);
+    return map;
+  });
 }
 
-/** 清除某 provider 的单个角色选择器（或全部） */
+/** 清除某 provider 的单个角色选择器（或全部）（读-改-写加锁 #8） */
 export async function clearCustomSelector(
   provider: ProviderName,
   role?: 'input' | 'submit' | 'response'
 ): Promise<CustomSelectorMap> {
-  const map = await loadCustomSelectors();
-  if (!map[provider]) return map;
-  if (role) {
-    delete map[provider]![role];
-    if (Object.keys(map[provider]!).length === 0) delete map[provider];
-  } else {
-    delete map[provider];
-  }
-  await saveCustomSelectors(map);
-  return map;
+  return withStorageLock(CUSTOM_SELECTORS_KEY, async () => {
+    const r = await chrome.storage.local.get(CUSTOM_SELECTORS_KEY);
+    const base = r[CUSTOM_SELECTORS_KEY];
+    const map: CustomSelectorMap = base && typeof base === 'object' ? (base as CustomSelectorMap) : {};
+    if (!map[provider]) return map;
+    if (role) {
+      delete map[provider]![role];
+      if (Object.keys(map[provider]!).length === 0) delete map[provider];
+    } else {
+      delete map[provider];
+    }
+    await saveCustomSelectors(map);
+    return map;
+  });
 }

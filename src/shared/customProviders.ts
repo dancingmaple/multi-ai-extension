@@ -1,5 +1,6 @@
 import { CUSTOM_PROVIDERS_KEY, CUSTOM_PROVIDER_PREFIX, PROVIDER_LABELS, PROVIDER_URLS, ALL_PROVIDERS } from './constants';
 import type { CustomProvider, CustomProviderMap, ProviderName } from './types';
+import { withStorageLock } from './concurrency';
 
 /**
  * 用户自定义 AI 网页的永久存储。
@@ -55,27 +56,35 @@ export function newCustomProviderId(): ProviderName {
   return CUSTOM_PROVIDER_PREFIX + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
-/** 新增 / 覆盖一个自定义 AI 节点 */
+/** 新增 / 覆盖一个自定义 AI 节点（读-改-写加锁，避免并发覆盖 #8） */
 export async function upsertCustomProvider(
   input: Omit<CustomProvider, 'createdAt' | 'updatedAt'> & Partial<Pick<CustomProvider, 'createdAt'>>
 ): Promise<CustomProviderMap> {
-  const map = await loadCustomProviders();
-  const now = Date.now();
-  const prev = map[input.id];
-  map[input.id] = {
-    ...input,
-    createdAt: prev?.createdAt ?? input.createdAt ?? now,
-    updatedAt: now,
-  };
-  await saveCustomProviders(map);
-  return map;
+  return withStorageLock(CUSTOM_PROVIDERS_KEY, async () => {
+    const r = await chrome.storage.local.get(CUSTOM_PROVIDERS_KEY);
+    const base = r[CUSTOM_PROVIDERS_KEY];
+    const map: CustomProviderMap = base && typeof base === 'object' ? (base as CustomProviderMap) : {};
+    const now = Date.now();
+    const prev = map[input.id];
+    map[input.id] = {
+      ...input,
+      createdAt: prev?.createdAt ?? input.createdAt ?? now,
+      updatedAt: now,
+    };
+    await saveCustomProviders(map);
+    return map;
+  });
 }
 
 export async function deleteCustomProvider(id: ProviderName): Promise<CustomProviderMap> {
-  const map = await loadCustomProviders();
-  delete map[id];
-  await saveCustomProviders(map);
-  return map;
+  return withStorageLock(CUSTOM_PROVIDERS_KEY, async () => {
+    const r = await chrome.storage.local.get(CUSTOM_PROVIDERS_KEY);
+    const base = r[CUSTOM_PROVIDERS_KEY];
+    const map: CustomProviderMap = base && typeof base === 'object' ? (base as CustomProviderMap) : {};
+    delete map[id];
+    await saveCustomProviders(map);
+    return map;
+  });
 }
 
 /** 内置 7 家 + 自定义节点，供各页面的平台选择器统一使用 */

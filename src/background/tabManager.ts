@@ -208,25 +208,34 @@ async function findExistingTab(provider: ProviderName): Promise<number | null> {
   return null;
 }
 
-async function waitForTabReady(tabId: number): Promise<void> {
+function waitForTabReady(tabId: number): Promise<void> {
+  // 事件驱动：监听 tabs.onUpdated(status==='complete')，不再每 500ms 轮询
+  // chrome.tabs.get（#40）。manifest 已声明 tabs 权限，webNavigation 亦可但 onUpdated 更直接。
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('Tab load timeout')), 30000);
-    const check = () => {
-      chrome.tabs.get(tabId, (tab) => {
-        if (chrome.runtime.lastError) {
-          clearTimeout(timeout);
-          reject(chrome.runtime.lastError);
-          return;
-        }
-        if (tab.status === 'complete') {
-          clearTimeout(timeout);
-          resolve();
-        } else {
-          setTimeout(check, 500);
-        }
-      });
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (ok: boolean, err?: unknown) => {
+      if (settled) return;
+      settled = true;
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      if (timer !== undefined) clearTimeout(timer);
+      if (ok) resolve();
+      else reject(err instanceof Error ? err : new Error(String(err)));
     };
-    check();
+    timer = setTimeout(() => finish(false, new Error('Tab load timeout')), 30000);
+    const onUpdated = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
+      if (updatedTabId !== tabId) return;
+      if (info.status === 'complete') finish(true);
+    };
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    // 立即查一次：标签页可能早已 complete（先前轮询改事件驱动前的窗口期）
+    chrome.tabs.get(tabId, (tab) => {
+      if (chrome.runtime.lastError) {
+        finish(false, chrome.runtime.lastError);
+        return;
+      }
+      if (tab.status === 'complete') finish(true);
+    });
   });
 }
 
