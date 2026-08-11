@@ -332,8 +332,12 @@ async function runEmbedNode(
           onDone: (finalContent) => finish({ text: finalContent }),
           onError: (code, msg) => finish({ error: `${code}: ${msg}` }),
         });
-        // 安全超时兜底（各家 responseTimeout 上限 120s，这里给 150s）
-        setTimeout(() => finish({ error: '内嵌执行超时（150s）' }), 150_000);
+        // 安全超时兜底（各家 responseTimeout 上限 120s，这里给 150s）。
+        // 超时立即取消 embedBridge 上的待处理回调，避免 pending[taskId] 内存泄漏（#12）
+        setTimeout(() => {
+          embedBridge.cancel(taskId);
+          finish({ error: '内嵌执行超时（150s）' });
+        }, 150_000);
       });
       if (res.text && res.text.length > 0) {
         outputs[p] = res.text;
@@ -1279,7 +1283,10 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   restoreRunToCanvas: (id) => {
     const rec = get().runHistory.find((r) => r.id === id);
     if (!rec) return;
-    // 用历史快照重建节点（含提示词/输出/位置），edges 直接还原
+    // 用历史快照重建节点（含提示词/输出/位置），edges 直接还原。
+    // 恢复时统一把状态重置为 idle（保留 output/outputs 作参考），否则会带着
+    // error/reviewing 等脏状态回到画布，却没恢复对应的 taskId/tabIds/pendingContinue，
+    // 导致节点显示为「出错/待采纳」却点不动（#37）。
     const nodes: WBNode[] = rec.nodes.map((n) => ({
       id: n.id,
       type: n.nodeType,
@@ -1290,12 +1297,13 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         prompt: n.prompt,
         providers: n.providers,
         varName: n.varName,
+        // 保留历史输出作参考，但状态归零复位
         output: n.output,
         outputs: n.outputs as Partial<Record<ProviderName, string>>,
-        status: n.status,
+        status: 'idle' as const,
         renderedPrompt: n.renderedPrompt,
         urls: n.urls,
-        error: n.error,
+        error: undefined,
       },
     }));
     set({ nodes, edges: rec.edges, panel: 'none' });
