@@ -6,11 +6,9 @@ import type {
   TaskStateUpdateMessage,
   ConversationUpdateMessage,
 } from './types';
+import { createLogger } from './debug';
 
-const DEBUG = true;
-function log(...args: unknown[]): void {
-  if (DEBUG) console.log('[MultiAI:shared:messaging]', ...args);
-}
+const log = createLogger('[MultiAI:shared:messaging]');
 
 export function generateTaskId(): string {
   return `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

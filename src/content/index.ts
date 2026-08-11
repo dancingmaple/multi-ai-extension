@@ -106,23 +106,37 @@ function reportUrl(): void {
 }
 
 // 监听 SPA 路由变化（地址栏 URL 改变）
+const LOCATION_EVENT = 'multi-ai-locationchange';
+const HISTORY_PATCH_FLAG = '__multiAiHistoryPatched';
+
 (() => {
+  // 每个脚本实例都订阅事件；即便 history 已被先前实例包过，本实例仍能收到通知
+  window.addEventListener(LOCATION_EVENT, reportUrl);
+  window.addEventListener('popstate', reportUrl);
+  window.addEventListener('hashchange', reportUrl);
+  window.addEventListener('load', reportUrl);
+  // 初次也报一次
+  reportUrl();
+
+  // 内容脚本可能被重复注入（扩展重载 / 手动 executeScript）。
+  // 没有守卫时 pushState 会被层层包裹，一次跳转触发 N 次上报，
+  // 且旧包装持有已失效的闭包状态（#65）。
+  const w = window as unknown as Record<string, unknown>;
+  if (w[HISTORY_PATCH_FLAG]) return;
+  w[HISTORY_PATCH_FLAG] = true;
+
   const patch = (m: 'pushState' | 'replaceState') => {
     const orig = history[m];
     const wrapper = function (this: History, ...args: unknown[]) {
       const r = (orig as (...a: unknown[]) => unknown).apply(this, args);
-      reportUrl();
+      // 广播而非直接调用，让所有实例（含后注入的）都能响应
+      window.dispatchEvent(new Event(LOCATION_EVENT));
       return r;
     };
     (history as unknown as Record<string, unknown>)[m] = wrapper;
   };
   patch('pushState');
   patch('replaceState');
-  window.addEventListener('popstate', reportUrl);
-  window.addEventListener('hashchange', reportUrl);
-  window.addEventListener('load', reportUrl);
-  // 初次也报一次
-  reportUrl();
 })();
 
 function runExecute(msg: ExecutePromptMessage, replyTarget?: Window | null): void {

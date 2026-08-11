@@ -2,6 +2,11 @@ import { BaseAdapter } from './base';
 import type { ProviderName } from '../../shared/types';
 import { SubmitFailedError, sleep } from '../../shared/utils';
 import { extractAnswer } from '../../shared/grab';
+import { observeDocumentThrottled } from '../dom/observer';
+import { PLACEHOLDER_RE } from '../../shared/constants';
+import { createLogger } from '../../shared/debug';
+
+const gLog = createLogger('[Gemini:adapter]');
 
 const STREAM_CONFIG = {
   HARD_STABLE: 2200,
@@ -10,7 +15,6 @@ const STREAM_CONFIG = {
   THINKING_PLACEHOLDER: '\u23f3 \u601d\u8003 / \u8054\u7f51\u68c0\u7d22\u4e2d\u2026',
   STREAM_THROTTLE_MS: 250,
   POLL_MS: 400,
-  PLACEHOLDER_RE: /^[.\u2026\u00b7\u2022\s]*$/,
 };
 
 function pageText(): string {
@@ -150,7 +154,7 @@ export class GeminiAdapter extends BaseAdapter {
     while (Date.now() - start < timeout) {
       const el = this.findInput();
       if (el) {
-        console.log('[Gemini:adapter] Page ready in ' + (Date.now() - start) + 'ms');
+        gLog('Page ready in ' + (Date.now() - start) + 'ms');
         await sleep(1000);
         return;
       }
@@ -164,7 +168,7 @@ export class GeminiAdapter extends BaseAdapter {
     for (const s of this.effectiveInputSelectors) {
       const el = [...document.querySelectorAll(s)].find((e) => this.isVisible(e)) as HTMLElement | undefined;
       if (el) {
-        console.log('[Gemini:adapter] Input found: selector="' + s + '", tag=' + el.tagName + ', cls=' + String(el.className).slice(0, 60));
+        gLog('Input found: selector="' + s + '", tag=' + el.tagName + ', cls=' + String(el.className).slice(0, 60));
         return el;
       }
     }
@@ -172,7 +176,7 @@ export class GeminiAdapter extends BaseAdapter {
     const allCe = [...document.querySelectorAll('[contenteditable="true"]')] as HTMLElement[];
     const vis = allCe.filter((e) => this.isVisible(e));
     if (vis.length) {
-      console.log('[Gemini:adapter] Fallback CE: tag=' + vis[0].tagName + ', cls=' + String(vis[0].className).slice(0, 60));
+      gLog('Fallback CE: tag=' + vis[0].tagName + ', cls=' + String(vis[0].className).slice(0, 60));
       return vis[0];
     }
     console.warn('[Gemini:adapter] No input found. CE total=' + allCe.length + ', visible=' + vis.length);
@@ -191,14 +195,14 @@ export class GeminiAdapter extends BaseAdapter {
     const el = this.findInput();
     if (!el) throw new SubmitFailedError(this.provider, 'No visible input found');
 
-    console.log('[Gemini:adapter] setPrompt: writing "' + prompt.slice(0, 40) + '" to ' + el.tagName + '.' + String(el.className).slice(0, 40));
+    gLog('setPrompt: writing "' + prompt.slice(0, 40) + '" to ' + el.tagName + '.' + String(el.className).slice(0, 40));
 
     let written = false;
 
     // --- Method 1: Clipboard paste (most reliable for rich editors) ---
     try {
       written = await this.tryClipboardPaste(el, prompt);
-      if (written) console.log('[Gemini:adapter] Method 1 (clipboard paste) succeeded');
+      if (written) gLog('Method 1 (clipboard paste) succeeded');
     } catch (e) {
       console.warn('[Gemini:adapter] Method 1 failed:', e instanceof Error ? e.message : e);
     }
@@ -212,7 +216,7 @@ export class GeminiAdapter extends BaseAdapter {
         await sleep(50);
         document.execCommand('insertText', false, prompt);
         written = true;
-        console.log('[Gemini:adapter] Method 2 (execCommand insertText) succeeded');
+        gLog('Method 2 (execCommand insertText) succeeded');
       } catch {
         console.warn('[Gemini:adapter] Method 2 failed');
       }
@@ -225,7 +229,7 @@ export class GeminiAdapter extends BaseAdapter {
         try {
           qlEditor.innerHTML = '<p>' + prompt.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '</p><p>') + '</p><p><br></p>';
           written = true;
-          console.log('[Gemini:adapter] Method 3 (Quill innerHTML) applied');
+          gLog('Method 3 (Quill innerHTML) applied');
         } catch {
           console.warn('[Gemini:adapter] Method 3 failed');
         }
@@ -238,7 +242,7 @@ export class GeminiAdapter extends BaseAdapter {
         const innerP = el.querySelector('p') || el;
         innerP.textContent = prompt;
         written = true;
-        console.log('[Gemini:adapter] Method 4 (inner p textContent) applied');
+        gLog('Method 4 (inner p textContent) applied');
       } catch {
         console.warn('[Gemini:adapter] Method 4 failed');
       }
@@ -252,7 +256,7 @@ export class GeminiAdapter extends BaseAdapter {
     // Verify
     const got = this.readBack(el);
     if (this.verifyWrite(el, prompt)) {
-      console.log('[Gemini:adapter] setPrompt OK (readback=' + got.slice(0, 30) + ')');
+      gLog('setPrompt OK (readback=' + got.slice(0, 30) + ')');
     } else {
       console.warn('[Gemini:adapter] setPrompt readback FAILED (got="' + got.slice(0, 30) + '")');
     }
@@ -365,7 +369,7 @@ export class GeminiAdapter extends BaseAdapter {
           this.pressEnter(input);
         }
       } else {
-        console.log('[Gemini:adapter] Submit appears successful');
+        gLog('Submit appears successful');
       }
       return;
     }
@@ -391,7 +395,7 @@ export class GeminiAdapter extends BaseAdapter {
       const vis = matches.filter((e) => this.isVisible(e));
       if (vis.length > 0) {
         const b = vis[0] as HTMLButtonElement;
-        console.log('[Gemini:adapter] Submit btn by selector "' + s + '": label=' + b.getAttribute('aria-label') + ', disabled=' + b.disabled);
+        gLog('Submit btn by selector "' + s + '": label=' + b.getAttribute('aria-label') + ', disabled=' + b.disabled);
         return b;
       }
     }
@@ -454,7 +458,7 @@ export class GeminiAdapter extends BaseAdapter {
 
     if (best) {
       const r = best.getBoundingClientRect();
-      console.log('[Gemini:adapter] Best-guess submit btn: aria-label="' + best.getAttribute('aria-label') + '", size=' + r.width + 'x' + r.height + ', hasSvg=' + (best.querySelector('svg') ? 'yes' : 'no') + ', dist=' + bestDist.toFixed(0));
+      gLog('Best-guess submit btn: aria-label="' + best.getAttribute('aria-label') + '", size=' + r.width + 'x' + r.height + ', hasSvg=' + (best.querySelector('svg') ? 'yes' : 'no') + ', dist=' + bestDist.toFixed(0));
     }
     return best;
   }
@@ -470,7 +474,7 @@ export class GeminiAdapter extends BaseAdapter {
       const btns = container.querySelectorAll('button') as NodeListOf<HTMLButtonElement>;
       for (const b of btns) {
         if (this.isVisible(b)) {
-          console.log('[Gemini:adapter] Nearby btn: label=' + b.getAttribute('aria-label') + ', disabled=' + b.disabled + ', cls=' + String(b.className).slice(0, 40));
+          gLog('Nearby btn: label=' + b.getAttribute('aria-label') + ', disabled=' + b.disabled + ', cls=' + String(b.className).slice(0, 40));
           return b;
         }
       }
@@ -484,7 +488,7 @@ export class GeminiAdapter extends BaseAdapter {
         const btns = sibling.querySelectorAll('button') as NodeListOf<HTMLButtonElement>;
         for (const b of btns) {
           if (this.isVisible(b)) {
-            console.log('[Gemini:adapter] Sibling-area btn: label=' + b.getAttribute('aria-label') + ', cls=' + String(b.className).slice(0, 40));
+            gLog('Sibling-area btn: label=' + b.getAttribute('aria-label') + ', cls=' + String(b.className).slice(0, 40));
             return b;
           }
         }
@@ -513,7 +517,7 @@ export class GeminiAdapter extends BaseAdapter {
     btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
     btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
 
-    console.log('[Gemini:adapter] Clicked button (wasDisabled=' + wasDisabled + ', label=' + btn.getAttribute('aria-label') + ')');
+    gLog('Clicked button (wasDisabled=' + wasDisabled + ', label=' + btn.getAttribute('aria-label') + ')');
   }
 
   /** Press Enter key on element */
@@ -526,7 +530,7 @@ export class GeminiAdapter extends BaseAdapter {
     el.dispatchEvent(new KeyboardEvent('keydown', init));
     el.dispatchEvent(new KeyboardEvent('keypress', init));
     el.dispatchEvent(new KeyboardEvent('keyup', init));
-    console.log('[Gemini:adapter] Pressed Enter on input');
+    gLog('Pressed Enter on input');
   }
 
   override startStreaming(
@@ -548,7 +552,7 @@ export class GeminiAdapter extends BaseAdapter {
     // DOM 门闩快照：进入时本轮回答必未渲染
     const snapDomText = gClean(gLastAnswerEl());
     const snapDomCount = gAnswerEls().length;
-    console.log('[Gemini:adapter] SNAPSHOT', { domLen: snapDomText.length, domCount: snapDomCount, pageLen: gateLen });
+    gLog('SNAPSHOT', { domLen: snapDomText.length, domCount: snapDomCount, pageLen: gateLen });
 
     /** 优先 DOM 直取，拿不到再回退整页剪刀法 */
     const readAnswer = (): string => {
@@ -573,7 +577,7 @@ export class GeminiAdapter extends BaseAdapter {
         if (grew || domMoved) started = true;
       }
       const real = started ? readAnswer() : '';
-      const isPlaceholder = !real || STREAM_CONFIG.PLACEHOLDER_RE.test(real);
+      const isPlaceholder = !real || PLACEHOLDER_RE.test(real);
       const body = isPlaceholder ? '' : real;
       const show = body || (started ? STREAM_CONFIG.THINKING_PLACEHOLDER : '');
       if (show && show !== lastSent && now - lastEmit >= STREAM_CONFIG.STREAM_THROTTLE_MS) {
@@ -594,7 +598,7 @@ export class GeminiAdapter extends BaseAdapter {
       if (done) {
         stopped = true;
         const final = readAnswer() || body;
-        console.log('[Gemini:adapter] DONE finalLen=', final.length);
+        gLog('DONE finalLen=', final.length);
         onUpdate(final);
         onDone(final);
         cleanup();
@@ -604,15 +608,15 @@ export class GeminiAdapter extends BaseAdapter {
         stopped = true;
         cleanup();
         const final = readAnswer() || extractAnswer(pageText(), prompt).text;
-        if (final && !STREAM_CONFIG.PLACEHOLDER_RE.test(final)) onDone(final);
+        if (final && !PLACEHOLDER_RE.test(final)) onDone(final);
         else onError(new Error('StreamTimeoutError: \u8d85\u65f6\u672a\u80fd\u6293\u53d6\u5230 Gemini \u56de\u7b54\uff0c\u8bf7\u91cd\u8bd5\u6216\u7528\u300c\u624b\u52a8\u83b7\u53d6\u300d'));
       }
     };
 
-    const mo = new MutationObserver(() => { if (!stopped) tick(); });
-    mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+    // 合并节流：流式期间站点每秒数百条 mutation，逐条跑 tick 会打满 CPU（#7）
+    const stopObserve = observeDocumentThrottled(() => { if (!stopped) tick(); });
     const poll = window.setInterval(tick, STREAM_CONFIG.POLL_MS);
-    function cleanup() { mo.disconnect(); clearInterval(poll); }
+    function cleanup() { stopObserve(); clearInterval(poll); }
     tick();
     return cleanup;
   }

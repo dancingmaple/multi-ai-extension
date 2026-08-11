@@ -1,6 +1,10 @@
 import type { ProviderName } from '../../shared/types';
 import { BaseAdapter } from './base';
 import { SubmitFailedError } from '../../shared/utils';
+import { observeDocumentThrottled } from '../dom/observer';
+import { isElementVisible, findByPriority } from '../dom/query';
+import { PLACEHOLDER_RE } from '../../shared/constants';
+import { createLogger } from '../../shared/debug';
 
 /* ============================================================
    DeepSeek 适配器 · robust-v4
@@ -47,7 +51,6 @@ const CONFIG = {
   ],
 
   /* —— 占位符：全是点/省略号/中点/空白 —— */
-  PLACEHOLDER_RE: /^[.…·••\s…\u2026\u00b7]+$/,
 
   /* —— 完成判定三档静止阈值（ms） —— */
   HARD_STABLE: 2200,
@@ -57,21 +60,14 @@ const CONFIG = {
   THINKING_PLACEHOLDER: '⏳ 思考 / 联网检索中…',
   STREAM_THROTTLE_MS: 250,
   POLL_MS: 400,
-  DEBUG: true,
 };
 
-const log = (...a: unknown[]) => { if (CONFIG.DEBUG) console.log('[DeepSeek:adapter]', ...a); };
+const log = createLogger('[DeepSeek:adapter]');
 const MARKDOWN_SEL = CONFIG.ANSWER_MARKDOWN_SELECTORS.join(',');
 const TOOL_SEL = CONFIG.TOOL_BLOCK_SELECTORS.join(',');
 
 /* ---------- DOM 工具 ---------- */
-function isVisible(el: Element | null): boolean {
-  if (!el || !(el instanceof HTMLElement)) return false;
-  const r = el.getBoundingClientRect();
-  if (r.width < 2 || r.height < 2) return false;
-  const s = getComputedStyle(el);
-  return s.visibility !== 'hidden' && s.display !== 'none' && +s.opacity > 0.01;
-}
+const isVisible = isElementVisible;
 function directText(el: Element): string {
   let t = '';
   el.childNodes.forEach((n) => { if (n.nodeType === 3) t += n.textContent || ''; });
@@ -167,9 +163,8 @@ export class DeepSeekAdapter extends BaseAdapter {
 
   override async submit(): Promise<void> {
     await new Promise((r) => setTimeout(r, 150));
-    const btn = [...document.querySelectorAll(this.submitSelectors.join(','))]
-      .filter((b) => isVisible(b) && !(b as HTMLButtonElement).disabled)
-      .pop() as HTMLElement | undefined;
+    // 按选择器优先级查找，避免 querySelectorAll 文档顺序覆盖精确选择器（#50）
+    const btn = findByPriority(this.submitSelectors, isVisible);
     if (btn) { btn.click(); log('submit via button'); return; }
     const el = [...document.querySelectorAll(this.inputSelectors.join(','))].find(isVisible) as HTMLElement | undefined;
     if (el) {
@@ -219,7 +214,7 @@ export class DeepSeekAdapter extends BaseAdapter {
 
       // 门闩未开 → 旧文本一律视作空，绝不让上一轮尸体触发完成
       const raw = started ? curText : '';
-      const isPlaceholder = !raw || CONFIG.PLACEHOLDER_RE.test(raw);
+      const isPlaceholder = !raw || PLACEHOLDER_RE.test(raw);
       const real = isPlaceholder ? '' : raw;
 
       // 流式预览：有正文给正文，否则给占位（提问后即在等待，显示思考中合理）
@@ -257,7 +252,7 @@ export class DeepSeekAdapter extends BaseAdapter {
       if (now - t0 >= maxWait) {
         stopped = true; cleanup();
         const final = bodyText(lastAssistantMessage());
-        if (final && !CONFIG.PLACEHOLDER_RE.test(final)) {
+        if (final && !PLACEHOLDER_RE.test(final)) {
           log('HARD_TIMEOUT 有正文，按完成处理'); onDone(final);
         } else {
           log('HARD_TIMEOUT 无正文，报错'); onError(new Error('StreamTimeoutError: 超时未能抓取到回答，请重试'));
@@ -265,10 +260,10 @@ export class DeepSeekAdapter extends BaseAdapter {
       }
     };
 
-    const mo = new MutationObserver(() => { if (!stopped) tick(); });
-    mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+    // 合并节流：流式期间站点每秒数百条 mutation，逐条跑 tick 会打满 CPU（#7）
+    const stopObserve = observeDocumentThrottled(() => { if (!stopped) tick(); });
     const poll = window.setInterval(tick, CONFIG.POLL_MS);
-    function cleanup() { mo.disconnect(); clearInterval(poll); }
+    function cleanup() { stopObserve(); clearInterval(poll); }
 
     tick();
     return cleanup;

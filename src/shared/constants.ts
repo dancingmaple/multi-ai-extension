@@ -29,6 +29,21 @@ export const ELEMENT_TIMEOUT_MS = 15000;
 export const PING_RETRY_MAX = 5;
 export const PING_RETRY_DELAY_MS = 1000;
 
+/**
+ * 占位符文本判定（#51）。
+ * 各站点流式初期会先渲染「…」「•••」这类骨架，需与真实正文区分。
+ * 原先 6 个适配器各写一份、量词与字符集互不相同（星号/加号、重复字符），
+ * 统一到这里：字符集 = 句点 / 省略号 / 间隔号 / 项目符号 / 空白。
+ * 注意：调用点均已用 `!text ||` 单独处理空串，故这里用 `+` 不匹配空串。
+ */
+export const PLACEHOLDER_RE = /^[.\u2026\u00b7\u2022\s]+$/;
+
+/**
+ * 全文档 MutationObserver 的合并节流间隔（#7）。
+ * 流式输出时站点每秒可产生数百条 mutation，逐条触发重量级 tick 会打满 CPU。
+ */
+export const MUTATION_THROTTLE_MS = 200;
+
 export const SETTINGS_KEY = 'app_settings';
 
 export const DEFAULT_SETTINGS: AppSettings = {

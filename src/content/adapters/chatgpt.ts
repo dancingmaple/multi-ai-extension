@@ -1,6 +1,9 @@
 import { BaseAdapter } from './base';
 import type { ProviderName } from '../../shared/types';
 import { SubmitFailedError, sleep } from '../../shared/utils';
+import { observeDocumentThrottled } from '../dom/observer';
+import { PLACEHOLDER_RE } from '../../shared/constants';
+import { createLogger } from '../../shared/debug';
 
 /* ============================================================
    ChatGPT 适配器 · robust-v1
@@ -34,17 +37,15 @@ const CG = {
   ],
   THINKING_HEADER_RE: /^(Thought for|Thinking|Reasoning|Reasoned|已思考|思考了|正在思考|推理)/i,
   THINKING_ACTIVE_RE: /Thinking(?! for)|正在思考|思考中|Reasoning(?! for|ed)/i,
-  PLACEHOLDER_RE: /^[.…·••\s\u2026\u00b7]+$/,
   HARD_STABLE: 2200,
   SOFT_STABLE: 6000,
   ABS_CAP: 12000,
   THINKING_PLACEHOLDER: '⏳ 思考 / 联网检索中…',
   STREAM_THROTTLE_MS: 250,
   POLL_MS: 400,
-  DEBUG: true,
 };
 
-const cgLog = (...a: unknown[]) => { if (CG.DEBUG) console.log('[ChatGPT:adapter]', ...a); };
+const cgLog = createLogger('[ChatGPT:adapter]');
 const CG_MARKDOWN_SEL = CG.MARKDOWN_SELECTORS.join(',');
 const CG_TOOL_SEL = CG.TOOL_BLOCK_SELECTORS.join(',');
 
@@ -293,7 +294,7 @@ export class ChatGPTAdapter extends BaseAdapter {
       }
 
       const raw = started ? curText : '';
-      const isPlaceholder = !raw || CG.PLACEHOLDER_RE.test(raw);
+      const isPlaceholder = !raw || PLACEHOLDER_RE.test(raw);
       const real = isPlaceholder ? '' : raw;
 
       const show = real || CG.THINKING_PLACEHOLDER;
@@ -329,7 +330,7 @@ export class ChatGPTAdapter extends BaseAdapter {
       if (now - t0 >= maxWait) {
         stopped = true; cleanup();
         const final = cgBodyText(cgLastAssistant());
-        if (final && !CG.PLACEHOLDER_RE.test(final) && final !== snapshotText) {
+        if (final && !PLACEHOLDER_RE.test(final) && final !== snapshotText) {
           cgLog('HARD_TIMEOUT 有正文，按完成处理');
           onDone(final);
         } else {
@@ -339,10 +340,10 @@ export class ChatGPTAdapter extends BaseAdapter {
       }
     };
 
-    const mo = new MutationObserver(() => { if (!stopped) tick(); });
-    mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+    // 合并节流：流式期间站点每秒数百条 mutation，逐条跑 tick 会打满 CPU（#7）
+    const stopObserve = observeDocumentThrottled(() => { if (!stopped) tick(); });
     const poll = window.setInterval(tick, CG.POLL_MS);
-    function cleanup() { mo.disconnect(); clearInterval(poll); }
+    function cleanup() { stopObserve(); clearInterval(poll); }
 
     tick();
     return cleanup;

@@ -1,3 +1,44 @@
+import { MUTATION_THROTTLE_MS } from '../../shared/constants';
+
+/**
+ * 监听整篇文档，并把一段时间内的所有 mutation 合并成一次回调（#7）。
+ *
+ * 直接 `new MutationObserver(cb)` + `observe(document.body, {subtree:true})`
+ * 在 AI 站点流式输出时每秒会触发数百次回调；若回调内部还做
+ * cloneNode / querySelectorAll('*') 之类的重活，CPU 会被直接打满。
+ * 这里统一收口成「合并 + 节流」，配合各适配器自身的轮询兜底，
+ * 既不丢事件也不会空转。
+ *
+ * @returns 取消监听的函数（幂等）
+ */
+export function observeDocumentThrottled(
+  onMutate: () => void,
+  throttleMs: number = MUTATION_THROTTLE_MS
+): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let disposed = false;
+
+  const observer = new MutationObserver(() => {
+    if (disposed || timer !== null) return;
+    timer = setTimeout(() => {
+      timer = null;
+      if (!disposed) onMutate();
+    }, throttleMs);
+  });
+
+  observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    observer.disconnect();
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+}
+
 export function waitForElement(
   selectors: string[],
   timeoutMs: number = 15000
@@ -12,6 +53,7 @@ export function waitForElement(
     }
 
     let observer: MutationObserver;
+    let scheduled = false;
 
     const timer = setTimeout(() => {
       observer.disconnect();
@@ -22,7 +64,8 @@ export function waitForElement(
       );
     }, timeoutMs);
 
-    observer = new MutationObserver(() => {
+    const check = () => {
+      scheduled = false;
       for (const sel of selectors) {
         const el = document.querySelector<HTMLElement>(sel);
         if (el) {
@@ -32,6 +75,13 @@ export function waitForElement(
           return;
         }
       }
+    };
+
+    // 一帧内的成批 mutation 只做一次查询，避免整页高频改动时反复全选择器扫描（#7）
+    observer = new MutationObserver(() => {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(check);
     });
 
     observer.observe(document.body, { childList: true, subtree: true });

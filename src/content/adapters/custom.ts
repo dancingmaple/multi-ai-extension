@@ -1,6 +1,8 @@
 import { BaseAdapter } from './base';
 import type { ProviderName } from '../../shared/types';
 import { SubmitFailedError, sleep } from '../../shared/utils';
+import { observeDocumentThrottled } from '../dom/observer';
+import { PLACEHOLDER_RE } from '../../shared/constants';
 
 /* ============================================================
    通用自定义站点适配器
@@ -19,7 +21,6 @@ const CFG = {
   ABS_CAP: 15000,
   STREAM_THROTTLE_MS: 250,
   POLL_MS: 400,
-  PLACEHOLDER_RE: /^[.\u2026\u00b7\u2022\s]*$/,
   THINKING_PLACEHOLDER: '\u23f3 \u7b49\u5f85\u56de\u7b54\u4e2d\u2026',
 };
 
@@ -205,7 +206,7 @@ export class CustomAdapter extends BaseAdapter {
       if (!started && (cur !== snapText || count > snapCount)) started = true;
 
       const raw = started ? cur : '';
-      const real = !raw || CFG.PLACEHOLDER_RE.test(raw) ? '' : raw;
+      const real = !raw || PLACEHOLDER_RE.test(raw) ? '' : raw;
 
       const show = real || CFG.THINKING_PLACEHOLDER;
       if (show !== lastSent && now - lastEmit >= CFG.STREAM_THROTTLE_MS) {
@@ -236,15 +237,15 @@ export class CustomAdapter extends BaseAdapter {
         stopped = true;
         cleanup();
         const final = textOf(this.lastResponse());
-        if (final && final !== snapText && !CFG.PLACEHOLDER_RE.test(final)) onDone(final);
+        if (final && final !== snapText && !PLACEHOLDER_RE.test(final)) onDone(final);
         else onError(new Error('StreamTimeoutError: 超时未抓到回答，请检查「回答区域」选择器'));
       }
     };
 
-    const mo = new MutationObserver(() => { if (!stopped) tick(); });
-    mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+    // 合并节流：流式期间站点每秒数百条 mutation，逐条跑 tick 会打满 CPU（#7）
+    const stopObserve = observeDocumentThrottled(() => { if (!stopped) tick(); });
     const poll = window.setInterval(tick, CFG.POLL_MS);
-    function cleanup() { mo.disconnect(); clearInterval(poll); }
+    function cleanup() { stopObserve(); clearInterval(poll); }
 
     tick();
     return cleanup;

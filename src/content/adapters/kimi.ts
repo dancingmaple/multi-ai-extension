@@ -1,6 +1,9 @@
 import type { ProviderName } from '../../shared/types';
 import { BaseAdapter } from './base';
 import { SubmitFailedError } from '../../shared/utils';
+import { createLogger } from '../../shared/debug';
+
+const kLog = createLogger('[Kimi:adapter]');
 
 /* ============================================================
    Kimi 适配器 · robust-v2
@@ -13,7 +16,7 @@ import { SubmitFailedError } from '../../shared/utils';
    策略：可见输入框优先 + 占位符兜底 + 先点击激活 + execCommand 写入 +
          写后回读校验 + 发送按钮优先点击、Enter 兜底。
    ============================================================ */
-console.log('[Kimi:adapter] build=robust-v2 2026-08-03');
+kLog('build=robust-v2 2026-08-03');
 
 const SUBMIT_SELECTORS = [
   '.send-icon.iconify',
@@ -173,7 +176,7 @@ export class KimiAdapter extends BaseAdapter {
 
     el.focus();
     await new Promise((r) => setTimeout(r, 200));
-    console.log('[Kimi:adapter] setPrompt', { ok, readBack: readBack(el).length });
+    kLog('setPrompt', { ok, readBack: readBack(el).length });
   }
 
   /**
@@ -207,7 +210,7 @@ export class KimiAdapter extends BaseAdapter {
           x: rect.left + rect.width / 2,
           y: rect.top + rect.height / 2,
         });
-        console.log('[Kimi:adapter] submit → 已请求 background 受信任点击（标签页模式）', rect);
+        kLog('submit → 已请求 background 受信任点击（标签页模式）', rect);
       } catch (e) {
         throw new SubmitFailedError(this.provider, '请求后台受信任点击失败：' + (e instanceof Error ? e.message : String(e)));
       }
@@ -219,7 +222,7 @@ export class KimiAdapter extends BaseAdapter {
     // 按钮在 iframe 内的矩形交给父页面，由父页面加上 iframe 偏移后再转发给 background 点击。
     // （沿用 WebView 已实现的 __kimiSend 桥接协议。）
     window.parent.postMessage({ __kimiSend: true, rect, provider: this.provider }, '*');
-    console.log('[Kimi:adapter] submit → 已请求父页面发起受信任点击（iframe 模式）', rect);
+    kLog('submit → 已请求父页面发起受信任点击（iframe 模式）', rect);
     // background 用 chrome.debugger 点击后 Kimi 开始生成；这里无需再等
   }
 }
