@@ -9,6 +9,22 @@ import type { ElementRole } from '../shared/types';
 const OVERLAY_ID = 'multiAI-pick-overlay';
 const LABEL_ID = 'multiAI-pick-label';
 
+/**
+ * 选取稳定的语义属性选择器，优先级高于 :nth-child（网站改版后更不易失效）。
+ * 命中即返回，作为该层的选择器片段。
+ */
+function pickStableAttribute(el: Element): string | null {
+  const testid = el.getAttribute('data-testid');
+  if (testid) return `[data-testid="${CSS.escape(testid)}"]`;
+  const aria = el.getAttribute('aria-label');
+  if (aria) return `[aria-label="${CSS.escape(aria)}"]`;
+  const role = el.getAttribute('role');
+  if (role) return `[role="${CSS.escape(role)}"]`;
+  const name = el.getAttribute('name');
+  if (name) return `[name="${CSS.escape(name)}"]`;
+  return null;
+}
+
 export function getCssSelector(el: Element): string {
   if (!(el instanceof Element)) return '';
   if (el.id) return '#' + CSS.escape(el.id);
@@ -20,6 +36,12 @@ export function getCssSelector(el: Element): string {
     if (cur.id) {
       sel = '#' + CSS.escape(cur.id);
       parts.unshift(sel);
+      break;
+    }
+    // 优先采用稳定语义属性，单段即可唯一定位，避免依赖脆弱的层级
+    const stable = pickStableAttribute(cur);
+    if (stable) {
+      parts.unshift(stable);
       break;
     }
     const cls = [...cur.classList].filter((c) => c && !c.startsWith('__')).join('.');

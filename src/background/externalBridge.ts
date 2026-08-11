@@ -60,7 +60,6 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     stopKeepalive();
     return;
   }
-  chrome.storage.local.get('_ka').catch(() => {});
   for (const port of externalPorts) {
     try {
       port.postMessage({ type: 'KA' });
