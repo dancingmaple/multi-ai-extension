@@ -597,7 +597,7 @@ export const WebView: React.FC<WebViewProps> = ({ layout = 'columns' }) => {
                   }, PONG_TIMEOUT_MS);
                 }}
                 onError={() => setErrored((e) => ({ ...e, [provider]: true }))}
-                allow="clipboard-read; clipboard-write; microphone; camera"
+                allow="clipboard-write"
               />
 
               {maximized && providers.length > 1 && (

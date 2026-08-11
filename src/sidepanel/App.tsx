@@ -7,9 +7,7 @@ import WebView from './WebView';
 import type { BackgroundToUIMessage, ExportLayout, ExportSink } from '../shared/types';
 import styles from './App.module.css';
 import './theme.css';
-
-const THEME_ICON: Record<string, string> = { light: '☀', dark: '🌙', auto: '🌗' };
-const THEME_ORDER = ['light', 'dark', 'auto'] as const;
+import { THEME_ICON, THEME_ORDER } from './theme';
 
 const App: React.FC = () => {
   const setTask = useStore((s) => s.setTask);

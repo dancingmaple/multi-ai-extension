@@ -4,15 +4,13 @@ import type { Turn, Conversation } from '../shared/types';
 import { useEffectiveProviders } from '../shared/useEffectiveProviders';
 import WebView from './WebView';
 import styles from './Fullscreen.module.css';
+import { THEME_ICON, THEME_ORDER } from './theme';
 
 const fmtTime = (ts: number): string => {
   const d = new Date(ts);
   const p = (n: number) => String(n).padStart(2, '0');
   return `${p(d.getHours())}:${p(d.getMinutes())}`;
 };
-
-const THEME_ICON: Record<string, string> = { light: '☀', dark: '🌙', auto: '🌗' };
-const THEME_ORDER = ['light', 'dark', 'auto'] as const;
 
 const Fullscreen: React.FC = () => {
   const conversation = useStore((s) => s.conversation);

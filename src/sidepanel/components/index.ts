@@ -6,4 +6,3 @@ export { default as StatusBar } from './StatusBar';
 export { default as HistoryBar } from './HistoryBar';
 export { default as HistoryList } from './HistoryList';
 export { default as SettingsPanel } from './SettingsPanel';
-export { IframeGrid } from './IframeGrid';

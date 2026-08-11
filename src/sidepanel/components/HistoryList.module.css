@@ -178,6 +178,9 @@
   font-size: 13px;
   color: #1f2937;
   transition: background 0.1s;
+  /* 浏览器原生虚拟化：离屏行跳过布局/绘制，200 条历史不再全量渲染卡顿（#31） */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 112px;
 }
 
 .row:hover {
