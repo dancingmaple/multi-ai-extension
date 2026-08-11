@@ -6,67 +6,81 @@
 
 import type { AskTaskState, ProviderName, WorkbenchExecResult } from '../shared/types';
 import { DEFAULT_SETTINGS } from '../shared/constants';
-import { handleAskAll } from './messageRouter';
+import { handleAskAll, markTaskDeleted } from './messageRouter';
 import { getTask, deleteTask } from './stateStore';
 import { onBroadcast } from '../shared/messaging';
 
 /**
  * 事件驱动等待：订阅 TASK_STATE_UPDATE 广播，当本任务全部 settle 时立即返回
- * （替代 400ms 轮询，省电且更即时）；同时保留超时兜底。
+ * （替代 400ms 轮询，省电且更即时）；同时按「每 provider 独立 deadline」兜底（#42）。
  */
 function waitForSettled(
   taskId: string,
   providers: ProviderName[],
   outputs: Partial<Record<ProviderName, string>>,
   errors: Partial<Record<ProviderName, string>>,
-  deadline: number
+  deadlinePerProvider: Record<string, number>
 ): Promise<void> {
   return new Promise((resolve) => {
     let done = false;
+    const settled = new Set<ProviderName>();
     const finish = () => {
       if (done) return;
       done = true;
-      clearTimeout(timer);
+      clearInterval(tick);
       off();
       resolve();
     };
 
     const collect = (task: AskTaskState | undefined) => {
       if (!task || task.taskId !== taskId) return;
-      let allSettled = true;
       for (const p of providers) {
         const st = task.providers[p]?.status;
         if (st === 'done') {
           const content = task.providers[p]?.content ?? '';
           // 关键：done 但内容为空属于「抓取失败/未渲染完」，不能算成功；
-          // 留作未落定，最终记为超时错误，便于用户用「手动获取」补救。
+          // 留作未落定，最终由 deadline 兜底记为超时错误。
           if (content.trim().length > 0) {
             if (outputs[p] === undefined) {
               outputs[p] = content;
               console.log('[Workbench:engine]', p, 'done (len=' + content.length + ')');
             }
-          } else {
-            allSettled = false;
+            settled.add(p);
           }
         } else if (st === 'error' || st === 'login_required') {
           if (errors[p] === undefined) {
-            errors[p] = task.providers[p].error || st;
+            errors[p] = task.providers[p]?.error || st;
             console.warn('[Workbench:engine]', p, 'failed:', errors[p]);
           }
-        } else {
-          allSettled = false;
+          settled.add(p);
         }
       }
-      if (allSettled) finish();
+      if (settled.size >= providers.length) finish();
     };
 
     const off = onBroadcast((msg) => {
       if (msg.type === 'TASK_STATE_UPDATE') collect(msg.task);
     });
+
+    // 每 provider 独立 deadline：短超时 provider（如 deepseek 45s）不再被最长家
+    // （如 chatgpt 120s）拖到统一 deadline 才记超时（#42）。
+    const tick = setInterval(() => {
+      for (const p of providers) {
+        if (settled.has(p)) continue;
+        const dl = deadlinePerProvider[p];
+        if (dl !== undefined && Date.now() >= dl) {
+          if (outputs[p] === undefined && errors[p] === undefined) {
+            errors[p] = '超时（无响应，可能未登录 / 网络不通 / 受信任点击未触发）';
+            console.warn('[Workbench:engine]', p, 'timeout');
+          }
+          settled.add(p);
+        }
+      }
+      if (settled.size >= providers.length) finish();
+    }, 500);
+
     // 订阅前先看一次当前状态（可能已全部完成）
     collect(getTask(taskId));
-    // 超时兜底：超过 deadline 仍未 settle 则强制返回（交由外层记为超时）
-    const timer = setTimeout(finish, Math.max(0, deadline - Date.now()));
   });
 }
 
@@ -89,24 +103,22 @@ export async function runWorkbenchExecution(
 
   console.log('[Workbench:engine] 开始执行', { taskId, providers, nodeId: opts?.nodeId });
   // 透传 nodeId：让后台为「这个节点」复用 / 新建其专属标签页（每节点独立会话，不串台）
-  await handleAskAll(taskId, prompt, providers, { nodeId: opts?.nodeId });
 
-  // 取各家超时上限 + 余量作为总等待上限
-  const maxPer = Math.max(...providers.map((p) => DEFAULT_SETTINGS.responseTimeoutMs[p] ?? 60000));
-  const deadline = Date.now() + maxPer + 8000;
-  const budgetSec = Math.round((maxPer + 8000) / 1000);
-
-  // 事件驱动等待（广播驱动，即时返回；超时兜底走外层错误处理）
-  await waitForSettled(taskId, providers, outputs, errors, deadline);
-
-  // 超时仍未落定（仍在 sending/waiting，或 done 但内容为空）的 provider，
-  // 记为明确超时错误，便于排查，也提示用户可「手动获取」。
+  // 每 provider 独立 deadline（超时上限 + 余量），短超时家不被最长家拖住（#42）
+  const deadlinePerProvider: Record<string, number> = {};
   for (const p of providers) {
-    if (outputs[p] === undefined && errors[p] === undefined) {
-      errors[p] = `超时（>${budgetSec}s 无响应，可能未登录 / 网络不通 / 受信任点击未触发）`;
-      console.warn('[Workbench:engine]', p, 'timeout after', budgetSec, 's');
-    }
+    const per = DEFAULT_SETTINGS.responseTimeoutMs[p] ?? 60000;
+    deadlinePerProvider[p] = Date.now() + per + 8000;
   }
+
+  // 并行：派发指令（不阻塞） + 事件驱动等待（广播驱动即时返回，超时兜底）。
+  // 关键：不能 await handleAskAll —— 它内部 await Promise.allSettled(dispatches)，
+  // 单家 dispatch 最坏数十秒（tab ready + sendMessage 超时），会超过 deadline
+  // 导致 waitForSettled 永不启动、整个请求永久挂起。改为 fire dispatch 同时启动等待。
+  const dispatchPromise = handleAskAll(taskId, prompt, providers, { nodeId: opts?.nodeId });
+  await waitForSettled(taskId, providers, outputs, errors, deadlinePerProvider);
+  // 派发链应已随 settle 完成；兜底 await 一下避免悬挂 Promise
+  await dispatchPromise.catch(() => {});
 
   // 收集每家 AI 的最终会话地址与标签页 id（回看/手动获取/会话坞用）。
   // 优先用实时标签页地址（最权威），content script 经 EMBED_URL 回传的 url 作为兜底。
@@ -137,7 +149,9 @@ export async function runWorkbenchExecution(
   });
 
   // 工作台任务用完即弃：从 stateStore 删除，避免 tasks Map / lastTask 无限膨胀
-  // （工作台有自己的运行历史与节点结果存储，不需要留 background 运行时态）
+  // （工作台有自己的运行历史与节点结果存储，不需要留 background 运行时态）。
+  // 先 markTaskDeleted 进入宽限期，使 deadline 后迟到的 TASK_DONE 有日志而非静默丢弃（#20）。
+  markTaskDeleted(taskId);
   deleteTask(taskId);
 
   return { ok, outputs, errors, taskId, urls, tabIds };

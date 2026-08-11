@@ -51,12 +51,24 @@ export function EmbeddedRunner(): JSX.Element {
     };
   }, [providers.join(',')]);
   const urlOf = (p: ProviderName) => urls[p] || PROVIDER_URLS[p] || '';
+  const originOf = (p: ProviderName): string => {
+    try {
+      const u = urlOf(p);
+      return u ? new URL(u).origin : '';
+    } catch {
+      return '';
+    }
+  };
 
   // 统一路由 iframe 回传的 postMessage（含 PING/PONG/READY/EXECUTE_*/GRAB_RESULT）
   useEffect(() => {
     const onMsg = (ev: MessageEvent) => {
       const data = ev.data as Record<string, unknown> | null;
       if (!data || typeof data !== 'object') return;
+      if (data.__multiAi == null) return;
+      // 安全校验：只接受来自已注册 iframe contentWindow 的消息，拒绝任意来源伪造
+      const known = Object.values(frameRefs.current).some((f) => f?.contentWindow === ev.source);
+      if (!known) return;
       if (data.__multiAi === EMBED_MSG.READY || data.__multiAi === EMBED_MSG.PONG) {
         const p = data.provider as ProviderName | undefined;
         if (p && providers.includes(p)) setReadyMap((m) => (m[p] ? m : { ...m, [p]: true }));
@@ -143,13 +155,14 @@ export function EmbeddedRunner(): JSX.Element {
                     className={`wb-embed__frame ${isPreview ? 'is-open' : ''}`}
                     src={urlOf(p)}
                     title={labelOf(p)}
-                    allow="clipboard-read; clipboard-write; microphone; camera"
+                    allow="clipboard-write"
                     onLoad={() => {
                       setLoadedMap((m) => ({ ...m, [p]: true }));
                       const w = frameRefs.current[p]?.contentWindow ?? null;
-                      embedBridge.registerProvider(p, w);
+                      const o = originOf(p);
+                      embedBridge.registerProvider(p, w, o);
                       try {
-                        w?.postMessage({ __multiAi: EMBED_MSG.PING, provider: p }, '*');
+                        w?.postMessage({ __multiAi: EMBED_MSG.PING, provider: p }, o || '*');
                       } catch {
                         /* ignore */
                       }

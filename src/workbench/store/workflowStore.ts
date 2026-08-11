@@ -333,31 +333,36 @@ async function grabEmbedNode(
   const errors: Partial<Record<ProviderName, string>> = {};
   const urls: Partial<Record<ProviderName, string>> = {};
 
-  for (const p of providers) {
-    get().setGrabProgress({ nodeId, provider: p });
-    const ready = await embedBridge.waitReady(p, 15000);
-    if (!ready) {
-      errors[p] = '内嵌 iframe 未就绪，无法读屏';
-      continue;
-    }
-    const reqId = `embed_grab_${nodeId}_${p}_${Date.now().toString(36)}`;
-    const res = await new Promise<{ text: string; method: string; reason?: string; url?: string }>((resolve) => {
-      let done = false;
-      embedBridge.grab(p, prompt, reqId, (r) => {
-        if (done) return;
-        done = true;
-        resolve(r);
-      });
-      setTimeout(() => {
-        if (!done) {
+  // 并行抓取（与 runEmbedNode 一致），避免 N 家线性叠加等待（原串行 3 家最坏 135s）
+  const results = await Promise.allSettled(
+    providers.map(async (p) => {
+      get().setGrabProgress({ nodeId, provider: p });
+      const ready = await embedBridge.waitReady(p, 15000);
+      if (!ready) return { p, text: '', method: 'none', reason: '内嵌 iframe 未就绪，无法读屏', url: undefined as string | undefined };
+      const reqId = `embed_grab_${nodeId}_${p}_${Date.now().toString(36)}`;
+      const res = await new Promise<{ text: string; method: string; reason?: string; url?: string }>((resolve) => {
+        let done = false;
+        embedBridge.grab(p, prompt, reqId, (r) => {
+          if (done) return;
           done = true;
-          resolve({ text: '', method: 'none', reason: '读屏超时' });
-        }
-      }, 45_000);
-    });
-    if (res.text && res.text.length > 0) outputs[p] = res.text;
-    else if (res.reason) errors[p] = res.reason;
-    if (res.url) urls[p] = res.url;
+          resolve(r);
+        });
+        setTimeout(() => {
+          if (!done) {
+            done = true;
+            resolve({ text: '', method: 'none', reason: '读屏超时' });
+          }
+        }, 45_000);
+      });
+      return { p, ...res };
+    })
+  );
+  for (const r of results) {
+    if (r.status !== 'fulfilled') continue;
+    const { p, text, reason, url } = r.value;
+    if (text && text.length > 0) outputs[p] = text;
+    else if (reason) errors[p] = reason;
+    if (url) urls[p] = url;
   }
 
   return { ok: Object.keys(outputs).length > 0, outputs, errors, urls, tabIds: undefined };
@@ -650,7 +655,13 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
   /** 手动运行单个节点：取消进行中的暂停链，避免与自动流程冲突 */
   runNode: async (id) => {
-    pendingContinue = null;
+    // 若工作流正暂停等待确认，手动运行单节点视为「放弃当前暂停链」：
+    // 必须先重置 running/awaitingConfirm，否则 pendingContinue 已清空而
+    // running 仍为 true，后续点「采纳」永远无法恢复 → 运行按钮永久 disabled。
+    if (get().awaitingConfirm || pendingContinue) {
+      pendingContinue = null;
+      set({ running: false, awaitingConfirm: false });
+    }
     await get().executeNode(id);
   },
 
@@ -727,6 +738,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   executeNode: async (id) => {
     // 防同节点重入：上一次执行还没结束（背景 SW 卡/AI 超时/用户连点）
     if (executingNodes.has(id)) return;
+    // 防并发：工作流正在执行（非暂停态）时不允许手动触发另一节点，避免状态机紊乱
+    if (get().running && !get().awaitingConfirm) return;
     const node = get().nodes.find((n) => n.id === id);
     if (!node) return;
     const { nodeType, prompt, providers } = node.data;

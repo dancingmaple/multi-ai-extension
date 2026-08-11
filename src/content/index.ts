@@ -12,6 +12,9 @@ import { getCustomForProvider } from '../shared/customSelectors';
 /** 测试台里「尚未保存」的自定义网页，用这个占位 id 通信 */
 export const DRAFT_PROVIDER = 'custom:draft';
 
+/** 扩展自身 origin（父页面一定是扩展页面），用于校验 postMessage 来源与指定 targetOrigin */
+const EXT_ORIGIN = chrome.runtime.getURL('').replace(/\/$/, '');
+
 /**
  * 内嵌执行「新建会话」机制：
  * 工作台/测试台每次在 iframe 里跑一个节点，都应从「全新对话」开始，
@@ -84,7 +87,8 @@ let currentEmbedTaskId: string | undefined;
 // 向父页面（iframe 嵌入视图的宿主）postMessage 回传数据
 function replyTo(target: Window | null, payload: Record<string, unknown>): void {
   try {
-    (target ?? window.parent ?? window).postMessage(payload, '*');
+    // 用扩展自身 origin 作为 targetOrigin（不用 '*'），避免回答泄露给恶意父页面
+    (target ?? window.parent ?? window).postMessage(payload, EXT_ORIGIN);
   } catch {
     /* 父页面可能已关闭 */
   }
@@ -198,6 +202,8 @@ onBackgroundMessage((msg, _sender) => {
 // ── 嵌入视图：插件父页面（Fullscreen / 侧边栏的网页视图）通过 window.postMessage
 // 把任务下发给 iframe 内的 content script。跨域 postMessage 不受同源策略限制。 ──
 window.addEventListener('message', (ev: MessageEvent) => {
+  // 安全校验：只接受来自扩展自身页面（父页面）的指令，拒绝任意第三方网页伪造
+  if (ev.origin !== EXT_ORIGIN) return;
   const data = ev.data as Record<string, unknown> | null;
   if (!data || typeof data !== 'object') return;
 
@@ -325,10 +331,22 @@ if (window.parent && window.parent !== window) {
     if (!raw) return;
     sessionStorage.removeItem(PENDING_EXEC_KEY);
     const msg = JSON.parse(raw) as ExecutePromptMessage;
-    if (msg && msg.type === 'EXECUTE_PROMPT' && msg.taskId && msg.provider && msg.prompt) {
-      console.log('[MultiAI:content] 恢复待执行任务（新会话已就绪）taskId=', msg.taskId);
-      runExecute(msg, window.parent);
+    if (!msg || msg.type !== 'EXECUTE_PROMPT' || !msg.taskId || !msg.provider || !msg.prompt) return;
+    // 导航后重新校验：当前页是否仍属于目标 provider（防止登录跳转等重定向导致用错适配器操作错页面）
+    const currentP = getProviderFromUrl(location.href);
+    if (currentP !== msg.provider) {
+      console.warn('[MultiAI:content] 恢复任务时 provider 不匹配，丢弃', { expected: msg.provider, actual: currentP, host: location.hostname });
+      replyTo(window.parent, {
+        __multiAi: EMBED_MSG.EXECUTE_ERROR,
+        provider: msg.provider,
+        taskId: msg.taskId,
+        errorCode: 'PROVIDER_MISMATCH',
+        errorMessage: `新建会话后页面已跳转，未落在 ${msg.provider} 的页面（当前：${location.hostname}）`,
+      });
+      return;
     }
+    console.log('[MultiAI:content] 恢复待执行任务（新会话已就绪）taskId=', msg.taskId);
+    runExecute(msg, window.parent);
   } catch {
     /* 解析失败忽略，等待下一次执行 */
   }

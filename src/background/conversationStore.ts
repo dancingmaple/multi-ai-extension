@@ -22,6 +22,7 @@ const conversations = new Map<string, Conversation>();
 const taskToConversationId = new Map<string, string>();
 let currentConversationId: string | undefined;
 let loaded = false;
+let loadPromise: Promise<void> | undefined;
 
 function genId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -35,14 +36,26 @@ export function summarize(prompt: string, max = 24): string {
 
 async function ensureLoaded(): Promise<void> {
   if (loaded) return;
-  loaded = true;
-  try {
-    const r = await chrome.storage.local.get(STORAGE_KEY);
-    const map = (r[STORAGE_KEY] || {}) as Record<string, Conversation>;
-    for (const c of Object.values(map)) conversations.set(c.id, c);
-  } catch {
-    /* storage 不可用时退化为纯内存 */
+  if (!loadPromise) {
+    loadPromise = (async () => {
+      try {
+        const r = await chrome.storage.local.get(STORAGE_KEY);
+        const map = (r[STORAGE_KEY] || {}) as Record<string, Conversation>;
+        for (const c of Object.values(map)) {
+          conversations.set(c.id, c);
+          // 重建 taskToConversationId 索引：SW 重启后 conversations 重新加载，
+          // 但 taskToConversationId 不持久化，若不重建则 sedimentTask(taskId) 找不到会话，
+          // 一轮全部 settle 后回答无法沉淀（#3）。
+          for (const t of c.turns) taskToConversationId.set(t.id, c.id);
+        }
+        loaded = true;
+      } catch {
+        /* storage 不可用时退化为纯内存 */
+        loaded = true;
+      }
+    })();
   }
+  return loadPromise;
 }
 
 async function persist(): Promise<void> {

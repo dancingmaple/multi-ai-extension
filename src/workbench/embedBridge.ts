@@ -30,6 +30,7 @@ export interface GrabResult {
 interface FrameEntry {
   win: Window | null;
   ready: boolean;
+  origin: string;
 }
 
 class EmbedBridge {
@@ -38,8 +39,8 @@ class EmbedBridge {
   private grabPending = new Map<string, (r: GrabResult) => void>();
 
   /** React 宿主在 iframe 加载后注册其窗口；win 为 null 表示卸载 */
-  registerProvider(p: ProviderName, win: Window | null): void {
-    this.frames.set(p, { win, ready: false });
+  registerProvider(p: ProviderName, win: Window | null, origin?: string): void {
+    this.frames.set(p, { win, ready: false, origin: origin ?? '' });
   }
 
   unregisterProvider(p: ProviderName): void {
@@ -71,7 +72,7 @@ class EmbedBridge {
       const f = this.frames.get(p);
       if (f?.win) {
         try {
-          f.win.postMessage({ __multiAi: EMBED_MSG.PING, provider: p }, '*');
+          f.win.postMessage({ __multiAi: EMBED_MSG.PING, provider: p }, f.origin || '*');
         } catch {
           /* iframe 可能正在卸载 */
         }
@@ -87,7 +88,7 @@ class EmbedBridge {
     if (!f?.win) return false;
     this.pending.set(taskId, handlers);
     try {
-      f.win.postMessage({ __multiAi: EMBED_MSG.EXECUTE, provider: p, prompt, taskId }, '*');
+      f.win.postMessage({ __multiAi: EMBED_MSG.EXECUTE, provider: p, prompt, taskId }, f.origin || '*');
       return true;
     } catch {
       this.pending.delete(taskId);
@@ -101,7 +102,7 @@ class EmbedBridge {
     if (!f?.win) return false;
     this.grabPending.set(reqId, cb);
     try {
-      f.win.postMessage({ __multiAi: EMBED_MSG.GRAB, provider: p, prompt, reqId }, '*');
+      f.win.postMessage({ __multiAi: EMBED_MSG.GRAB, provider: p, prompt, reqId }, f.origin || '*');
       return true;
     } catch {
       this.grabPending.delete(reqId);
@@ -166,6 +167,11 @@ class EmbedBridge {
         break;
       }
     }
+  }
+
+  /** 取消某 taskId 的待处理回调（超时/中止时清理，避免 pending 泄漏） */
+  cancel(taskId: string): void {
+    this.pending.delete(taskId);
   }
 
   private findByTask(taskId?: string): ExecHandlers | undefined {

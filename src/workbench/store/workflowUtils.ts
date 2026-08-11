@@ -212,32 +212,26 @@ export function seedWorkflow(): { nodes: WBNode[]; edges: Edge[] } {
   return { nodes: [start, research, outline, draft, layout, end], edges };
 }
 
-/** 把所有节点的输出汇总成模板渲染所需的 map（按节点 ID 索引，带缓存） */
-let outputMapCache: { key: unknown[]; value: Record<string, NodeOutput> } | null = null;
-let varMapCache: { key: unknown[]; value: Record<string, NodeOutput> } | null = null;
-
-/** 输出相关引用序列（任一节点输出引用变化 → key 变化 → 重建） */
-function outputKey(nodes: WBNode[]): unknown[] {
-  return nodes.map((n) => [n.id, n.data.output, n.data.outputs, n.data.varName]);
-}
+/** 把所有节点的输出汇总成模板渲染所需的 map（按节点 ID 索引，带缓存）。
+ *  缓存按 nodes 数组引用比较——zustand 不可变更新保证引用变即内容变，引用同即内容同。 */
+let outputMapCache: { nodesRef: WBNode[]; value: Record<string, NodeOutput> } | null = null;
+let varMapCache: { nodesRef: WBNode[]; value: Record<string, NodeOutput> } | null = null;
 
 export function buildOutputMap(nodes: WBNode[]): Record<string, NodeOutput> {
-  const key = outputKey(nodes);
-  if (outputMapCache && outputMapCache.key.length === key.length && outputMapCache.key.every((k, i) => k === key[i])) {
+  if (outputMapCache && outputMapCache.nodesRef === nodes) {
     return outputMapCache.value;
   }
   const map: Record<string, NodeOutput> = {};
   for (const n of nodes) {
     map[n.id] = { output: n.data.output, outputs: n.data.outputs as Record<string, string> };
   }
-  outputMapCache = { key, value: map };
+  outputMapCache = { nodesRef: nodes, value: map };
   return map;
 }
 
 /** 把所有「设置了变量名」的节点输出汇总成 map（按变量名索引，优先级高于节点 ID，带缓存） */
 export function buildVarMap(nodes: WBNode[]): Record<string, NodeOutput> {
-  const key = outputKey(nodes);
-  if (varMapCache && varMapCache.key.length === key.length && varMapCache.key.every((k, i) => k === key[i])) {
+  if (varMapCache && varMapCache.nodesRef === nodes) {
     return varMapCache.value;
   }
   const map: Record<string, NodeOutput> = {};
@@ -247,7 +241,7 @@ export function buildVarMap(nodes: WBNode[]): Record<string, NodeOutput> {
       map[name] = { output: n.data.output, outputs: n.data.outputs as Record<string, string> };
     }
   }
-  varMapCache = { key, value: map };
+  varMapCache = { nodesRef: nodes, value: map };
   return map;
 }
 

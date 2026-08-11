@@ -17,6 +17,9 @@ import { sleep } from '../shared/utils';
 // ─────────────────────────────────────────────────────────────
 const WB_TAB_REGISTRY_KEY = 'wb_tab_registry_v1';
 const nodeProviderTabs = new Map<string, number>();
+// 同 (nodeId,provider) 并发请求去重：避免「快速二次触发」各 create 一张 tab，
+// 后写覆盖登记表 → 先创建的 tab 永不复用也不清理（孤儿 tab）。(#17)
+const inflightTabs = new Map<string, Promise<number>>();
 
 function registryKey(nodeId: string, provider: ProviderName): string {
   return `${nodeId}:${provider}`;
@@ -83,28 +86,38 @@ export async function getOrCreateProviderTab(
   // ── 工作台路径：每个 (节点, provider) 绑定一张专属标签页，复用而非新开 ──
   if (nodeId) {
     const key = registryKey(nodeId, provider);
-    const existing = nodeProviderTabs.get(key);
-    if (existing !== undefined) {
-      try {
-        const tab = await chrome.tabs.get(existing);
-        if (tab) {
-          // 复用前把该标签页重置为新会话（避免沿用上一个任务 / 上一轮对话的上下文）
-          await resetTabToNewChat(existing, provider);
-          console.log('[MultiAI:tabManager] 复用节点专属 tab', existing, 'for', key);
-          return existing;
-        }
-      } catch {
-        // 标签页已失效（被关/崩溃）：从登记表移除并重建
-        nodeProviderTabs.delete(key);
-        persistRegistry();
-      }
+    if (!inflightTabs.has(key)) {
+      inflightTabs.set(
+        key,
+        (async () => {
+          const existing = nodeProviderTabs.get(key);
+          if (existing !== undefined) {
+            try {
+              const tab = await chrome.tabs.get(existing);
+              if (tab) {
+                // 复用前把该标签页重置为新会话（避免沿用上一个任务 / 上一轮对话的上下文）
+                await resetTabToNewChat(existing, provider);
+                console.log('[MultiAI:tabManager] 复用节点专属 tab', existing, 'for', key);
+                return existing;
+              }
+            } catch {
+              // 标签页已失效（被关/崩溃）：从登记表移除并重建
+              nodeProviderTabs.delete(key);
+              persistRegistry();
+            }
+          }
+          // 还没有专属 tab：新开并登记
+          const tabId = await createProviderTab(provider);
+          nodeProviderTabs.set(key, tabId);
+          persistRegistry();
+          console.log('[MultiAI:tabManager] 新建并登记节点专属 tab', tabId, 'for', key);
+          return tabId;
+        })().finally(() => {
+          inflightTabs.delete(key);
+        })
+      );
     }
-    // 还没有专属 tab：新开并登记
-    const tabId = await createProviderTab(provider);
-    nodeProviderTabs.set(key, tabId);
-    persistRegistry();
-    console.log('[MultiAI:tabManager] 新建并登记节点专属 tab', tabId, 'for', key);
-    return tabId;
+    return inflightTabs.get(key)!;
   }
 
   // ── 侧边栏 / 全屏路径（无 nodeId）：沿用原有「按域名复用一个 tab」逻辑 ──

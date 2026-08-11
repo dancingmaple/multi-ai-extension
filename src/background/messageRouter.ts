@@ -121,6 +121,19 @@ function providersAllDone(task: AskTaskState): boolean {
   );
 }
 
+// 同 taskId 并发去重：WORKBENCH_EXECUTE / APPEND_TURN 重复触发时不全量重派发（#18）
+const inFlightTasks = new Set<string>();
+
+// 删除任务后的宽限期：SW 重启或 deadline 后迟到的 TASK_DONE/TASK_ERROR 不再被静默丢弃，
+// 而是给出明确日志，便于排查（#20）
+const recentlyDeleted = new Map<string, number>();
+const DELETE_GRACE_MS = 10_000;
+export function markTaskDeleted(taskId: string): void {
+  recentlyDeleted.set(taskId, Date.now());
+  const cutoff = Date.now() - DELETE_GRACE_MS * 3;
+  for (const [k, t] of recentlyDeleted) if (t < cutoff) recentlyDeleted.delete(k);
+}
+
 let ready = false;
 const pendingMessages: Array<{
   msg: Record<string, unknown>;
@@ -144,23 +157,15 @@ const UI_TYPES = new Set([
   'MANUAL_GRAB_ALL',
   'EMBED_GRAB_SAVE',
   'EXPORT_MARKDOWN',
-  'RESUME',
-  'KA',
   'TRUSTED_CLICK',
   'WORKBENCH_EXECUTE',
   'WORKBENCH_GRAB',
 ]);
 const CONTENT_TYPES = new Set(['PROVIDER_STATUS', 'STREAM_UPDATE', 'TASK_DONE', 'TASK_ERROR', 'EMBED_URL']);
 
-// 双形态入口（§4）：工具栏点击默认打开「侧边栏」；
+// 双形态入口（§4）：工具栏点击默认打开「侧边栏」（doInit 里 setPanelBehavior 已设置）；
 // 「全屏页」由侧边栏内的 ⛶ 按钮（SWITCH_MODE target=fullscreen）打开。
-// 注意：openPanelOnActionClick=true 与 action.onClicked 互斥，后者不会触发。
-chrome.action.onClicked.addListener(() => {
-  chrome.sidePanel
-    .setPanelBehavior({ openPanelOnActionClick: true })
-    .then(() => chrome.sidePanel.open({ windowId: chrome.windows.WINDOW_ID_CURRENT }))
-    .catch(() => {});
-});
+// 注意：openPanelOnActionClick=true 时 action.onClicked 不会触发，故不注册该 listener。
 
 chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
   const msg = rawMsg as Record<string, unknown>;
@@ -210,10 +215,16 @@ async function doInit(): Promise<void> {
   for (const { msg, sender, sendResponse } of pendingMessages) {
     if (msg.type && CONTENT_TYPES.has(msg.type as string)) {
       handleContentMessage(msg as Record<string, unknown>);
+      sendResponse();
     } else {
-      await handleUIMessage(msg as UIMessage, sender).catch(() => {});
+      // 需返回值的 UI 消息：必须把 handleUIMessage 的返回值传回，否则前端收到 undefined 判定失败
+      const resp = await handleUIMessage(msg as UIMessage, sender).catch((err) => {
+        const errMsg = err instanceof Error ? err.message : String(err ?? 'unknown');
+        console.error('[MultiAI:background] pending handleUIMessage error for', msg.type, ':', errMsg);
+        return { ok: false, outputs: {}, errors: { _system: errMsg } };
+      });
+      sendResponse(resp);
     }
-    sendResponse();
   }
   pendingMessages.length = 0;
 }
@@ -424,6 +435,17 @@ function handleContentMessage(msg: Record<string, unknown>): void {
   const provider = msg.provider as ProviderName;
   console.log('[MultiAI:background] handleContentMessage', msg.type, 'taskId=', taskId, 'provider=', provider);
 
+  // 任务不存在：可能是 SW 重启 / deadline 后已被删除。若是「宽限期内迟到」的结果，
+  // 给出明确日志便于排查；否则（未知 taskId）直接丢弃，避免静默吞消息（#20）。
+  if (!getTask(taskId)) {
+    if (recentlyDeleted.has(taskId)) {
+      console.warn('[MultiAI:background] 收到迟到结果（任务已删除，宽限期内）', msg.type, 'taskId=', taskId, 'provider=', provider);
+    } else {
+      console.warn('[MultiAI:background] 丢弃未知任务消息', msg.type, 'taskId=', taskId, 'provider=', provider);
+    }
+    return;
+  }
+
   let updatedTask: AskTaskState | undefined;
 
   switch (msg.type) {
@@ -469,6 +491,13 @@ export async function handleAskAll(
   targets: ProviderName[],
   opts?: { convId?: string; forceNew?: boolean; nodeId?: string }
 ): Promise<void> {
+  // 同 taskId 已在执行中则跳过，避免重复全量派发（#18）
+  if (inFlightTasks.has(taskId)) {
+    console.warn('[MultiAI:background] 重复 ASK_ALL（taskId 已在执行中），跳过', taskId);
+    return;
+  }
+  inFlightTasks.add(taskId);
+  try {
   const convId = opts?.convId;
   const forceNew = !!opts?.forceNew;
   const nodeId = opts?.nodeId;
@@ -494,6 +523,9 @@ export async function handleAskAll(
 
   const dispatches = targets.map((provider) => dispatchToProvider(taskId, provider, prompt, { forceNew, nodeId }));
   await Promise.allSettled(dispatches);
+  } finally {
+    inFlightTasks.delete(taskId);
+  }
 }
 
 export async function retryProvider(taskId: string, provider: ProviderName): Promise<void> {
