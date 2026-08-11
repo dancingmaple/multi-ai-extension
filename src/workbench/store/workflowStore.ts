@@ -47,6 +47,8 @@ import {
   sanitizeNodes,
   seedWorkflow,
   topoOrder,
+  detectCycle,
+  descendants,
 } from './workflowUtils';
 import type { NodeStatus as NodeStatusT } from './workflowUtils';
 
@@ -292,15 +294,41 @@ async function runEmbedNode(
           resolve(r);
         };
         embedBridge.run(p, prompt, taskId, {
-          onStream: (content) => {
-            const node = get().nodes.find((n) => n.id === nodeId);
-            if (!node) return;
-            const outs = { ...(node.data.outputs as Record<ProviderName, string>), [p]: content };
-            get().updateNodeData(nodeId, {
-              outputs: outs,
-              output: joinOutputs(outs, node.data.providers, PROVIDER_LABELS),
-            });
-          },
+          onStream: (() => {
+            // 节流：避免每个 token 都触发全量 nodes map 重渲染（#10）
+            let lastFlush = 0;
+            let pending: { outputs: Record<ProviderName, string>; output: string } | null = null;
+            let flushTimer: ReturnType<typeof setTimeout> | undefined;
+            const flush = () => {
+              if (pending) {
+                get().updateNodeData(nodeId, pending);
+                pending = null;
+              }
+            };
+            return (content: string) => {
+              const node = get().nodes.find((n) => n.id === nodeId);
+              if (!node) return;
+              const outs = { ...(node.data.outputs as Record<ProviderName, string>), [p]: content };
+              const patch = {
+                outputs: outs,
+                output: joinOutputs(outs, node.data.providers, PROVIDER_LABELS),
+              };
+              const now = Date.now();
+              if (now - lastFlush >= 100) {
+                lastFlush = now;
+                get().updateNodeData(nodeId, patch);
+              } else {
+                pending = patch;
+                if (!flushTimer) {
+                  flushTimer = setTimeout(() => {
+                    lastFlush = Date.now();
+                    flushTimer = undefined;
+                    flush();
+                  }, 100);
+                }
+              }
+            };
+          })(),
           onDone: (finalContent) => finish({ text: finalContent }),
           onError: (code, msg) => finish({ error: `${code}: ${msg}` }),
         });
@@ -396,6 +424,8 @@ const executingNodes = new Set<string>();
  * 只有「起点/终点」这种不进 reviewing 的节点才自动流过。
  */
 let pendingContinue: (() => Promise<void>) | null = null;
+// 取消标志：运行中途点「停止」置 true，runFrom 每轮检查并中断，避免只能等超时/刷新（#9）
+let runCancelled = false;
 
 /**
  * 顺序执行 order 中从 index 起的节点：
@@ -411,7 +441,9 @@ async function runFrom(
   set: (partial: Partial<WorkflowState>) => void
 ): Promise<void> {
   for (let i = index; i < order.length; i++) {
+    if (runCancelled) break;
     await get().executeNode(order[i].id);
+    if (runCancelled) break;
     const node = get().nodes.find((x) => x.id === order[i].id);
     const st = node?.data.status;
     if (st === 'reviewing') {
@@ -422,10 +454,12 @@ async function runFrom(
     }
     // success / error / idle：自动继续，不暂停
   }
-  // 全部节点跑完
+  // 全部节点跑完（或被取消）
+  const wasCancelled = runCancelled;
   pendingContinue = null;
+  runCancelled = false;
   set({ running: false, awaitingConfirm: false });
-  get().recordRun();
+  if (!wasCancelled) get().recordRun();
 }
 
 /**
@@ -531,8 +565,12 @@ interface WorkflowState {
   runNode: (id: string) => Promise<void>;
   /** 运行整个工作流：从入口节点开始，遇到「待采纳」节点即暂停，等待用户「采纳」后再继续 */
   runWorkflow: () => Promise<void>;
+  /** 从指定节点开始运行（仅重置该节点及其下游，保留上游已审阅结果）（#14） */
+  runFromNode: (id: string) => Promise<void>;
   /** 采纳当前节点（标记成功）；若工作流正处于「待采纳」暂停中，自动继续运行下一节点 */
   confirmNode: (id: string) => void;
+  /** 停止当前运行（中断后续节点，已进入执行的节点仍会跑完但不再继续）（#9） */
+  stopRun: () => void;
   /** 手动兜底：重新从各家标签页读屏，挽回自动抓取失败的回答 */
   grabNodeAnswers: (id: string) => Promise<void>;
 
@@ -655,6 +693,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
   /** 手动运行单个节点：取消进行中的暂停链，避免与自动流程冲突 */
   runNode: async (id) => {
+    runCancelled = false;
     // 若工作流正暂停等待确认，手动运行单节点视为「放弃当前暂停链」：
     // 必须先重置 running/awaitingConfirm，否则 pendingContinue 已清空而
     // running 仍为 true，后续点「采纳」永远无法恢复 → 运行按钮永久 disabled。
@@ -870,6 +909,14 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   runWorkflow: async () => {
+    // 环路依赖无法拓扑排序 → 直接报错，不运行（#35）
+    const cycle = detectCycle(get().nodes, get().edges);
+    if (cycle.length > 0) {
+      const msg = `检测到环路依赖（${cycle.join(' → ')}），无法运行工作流`;
+      console.warn('[Workbench:store]', msg);
+      get().updateNodeData(cycle[0], { status: 'error', error: msg });
+      return;
+    }
     // 运行前重置全部节点：清除旧状态/错误/残留自动获取定时器，并**清空上一轮运行产物**，
     // 保证本次运行一开始界面就是干净的（不显示上一轮的任何结果）。
     for (const n of get().nodes) clearAutoGrabTimer(n.id);
@@ -892,11 +939,59 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     });
     const order = topoOrder(get().nodes, get().edges);
     // 取消任何残留的暂停链，从头开始
+    runCancelled = false;
     pendingContinue = null;
     set({ running: true, awaitingConfirm: false });
     // runFrom 会在遇到「待采纳」节点时暂停（running 保持 true，等待用户「采纳」），
     // 跑完所有节点后再把 running 置回 false 并记录历史。
     await runFrom(0, order, get, set);
+  },
+
+  runFromNode: async (id) => {
+    // 仅重置「该节点 + 其下游」，保留上游已审阅的结果，便于只重跑变更后的部分（#14）
+    const cycle = detectCycle(get().nodes, get().edges);
+    if (cycle.length > 0) {
+      const msg = `检测到环路依赖（${cycle.join(' → ')}），无法运行工作流`;
+      console.warn('[Workbench:store]', msg);
+      get().updateNodeData(cycle[0], { status: 'error', error: msg });
+      return;
+    }
+    const downstream = descendants(id, get().edges);
+    if (downstream.size === 0) return;
+    for (const nid of downstream) clearAutoGrabTimer(nid);
+    set({
+      nodes: get().nodes.map((n) =>
+        downstream.has(n.id)
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                status: 'idle' as NodeStatus,
+                error: undefined,
+                autoGrabAt: undefined,
+                probeStage: undefined,
+                outputs: {},
+                output: '',
+                urls: undefined,
+                tabIds: undefined,
+                taskId: undefined,
+              },
+            }
+          : n
+      ),
+    });
+    const order = topoOrder(get().nodes, get().edges);
+    runCancelled = false;
+    pendingContinue = null;
+    set({ running: true, awaitingConfirm: false });
+    const idx = order.findIndex((n) => n.id === id);
+    await runFrom(idx >= 0 ? idx : 0, order, get, set);
+  },
+
+  stopRun: () => {
+    runCancelled = true;
+    pendingContinue = null;
+    set({ running: false, awaitingConfirm: false });
   },
 
   load: async () => {
@@ -921,9 +1016,18 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         const cleaned = saved.nodes.map((n) => {
           const at = n.data.autoGrabAt;
           const keep = typeof at === 'number' && at > now && typeof n.data.probeStage === 'number';
+          // 页面/SW 重载后，仍处于 running 的节点永远等不到完成回调 → 永久卡死。
+          // 重置为 error 并提示用户重跑，避免运行按钮永久 disabled（#3）。
+          const interrupted = n.data.status === 'running';
           return {
             ...n,
-            data: { ...n.data, autoGrabAt: keep ? at : undefined, probeStage: keep ? n.data.probeStage : undefined },
+            data: {
+              ...n.data,
+              status: interrupted ? ('error' as NodeStatus) : n.data.status,
+              error: interrupted ? '页面重载导致运行中断，请重新运行该节点' : n.data.error,
+              autoGrabAt: keep ? at : undefined,
+              probeStage: keep ? n.data.probeStage : undefined,
+            },
           };
         });
         set({ nodes: cleaned, edges: saved.edges ?? [] });
@@ -965,8 +1069,9 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       await chrome.storage.local.set({
         [STORAGE_KEY]: { nodes: sanitizeNodes(get().nodes), edges: sanitizeEdges(get().edges) },
       });
-    } catch {
-      /* 存储失败时静默 */
+    } catch (e) {
+      // 存储失败不应静默吞掉，否则用户改动丢失却无感知（#34）
+      console.warn('[Workbench:store] 保存工作流失败', e);
     }
   },
 
@@ -1009,7 +1114,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   loadSavedWorkflow: async (id) => {
     const wf = get().savedWorkflows.find((w) => w.id === id);
     if (!wf) return;
-    set({ nodes: wf.nodes, edges: wf.edges, panel: 'none' });
+    // 加载时同样过 sanitizeNodes，与 save 对称，剥离瞬态字段（measured/selected/dragging）（#16）
+    set({ nodes: sanitizeNodes(wf.nodes), edges: sanitizeEdges(wf.edges), panel: 'none' });
     void get().save();
   },
 
@@ -1093,11 +1199,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     const p = get().presetWorkflows.find((x) => x.id === id);
     if (!p) return;
     // 加载预设到画布（保留预设内保存的节点结构；状态重置为 idle）
-    const nodes = p.nodes.map((n) => ({
+    const nodes = sanitizeNodes(p.nodes).map((n) => ({
       ...n,
       data: { ...n.data, status: 'idle' as NodeStatus, error: undefined, outputs: {}, output: '' },
     }));
-    set({ nodes, edges: p.edges, panel: 'none' });
+    set({ nodes, edges: sanitizeEdges(p.edges), panel: 'none' });
     void get().save();
   },
 
@@ -1135,9 +1241,10 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   recordRun: () => {
     const rec = buildRunRecord(get().nodes, get().edges);
     const now = Date.now();
-    // 同一起点（startPrompt 相同）只保留一条历史：覆盖旧记录、更新到顶部，
-    // 避免同一次输入反复运行在「历史」里堆出多条相同起点。
-    const sameStartIdx = get().runHistory.findIndex((r) => r.startPrompt === rec.startPrompt);
+    // 按「起点 + 节点数 + 边数」去重：同输入不同画布配置不会被覆盖，避免丢配置（#36）
+    const sameStartIdx = get().runHistory.findIndex(
+      (r) => r.startPrompt === rec.startPrompt && r.nodes.length === rec.nodes.length && r.edges.length === rec.edges.length
+    );
     let next: RunRecord[];
     if (sameStartIdx >= 0) {
       const merged: RunRecord = {

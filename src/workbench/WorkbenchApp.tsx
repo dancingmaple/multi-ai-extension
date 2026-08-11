@@ -56,6 +56,7 @@ export function WorkbenchApp() {
   const onConnect = useWorkflowStore((s) => s.onConnect);
   const addNode = useWorkflowStore((s) => s.addNode);
   const runWorkflow = useWorkflowStore((s) => s.runWorkflow);
+  const stopRun = useWorkflowStore((s) => s.stopRun);
   const reset = useWorkflowStore((s) => s.reset);
   const load = useWorkflowStore((s) => s.load);
   const running = useWorkflowStore((s) => s.running);
@@ -132,6 +133,15 @@ export function WorkbenchApp() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // 关闭/刷新前兜底保存，防止 400ms 防抖未落盘导致改动丢失（#34）
+  useEffect(() => {
+    const onBeforeUnload = () => {
+      void useWorkflowStore.getState().save();
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
 
   // 双击画布空白：在该位置新建「汇总」节点（最常见的中间节点）
   const onPaneClick = () => {
@@ -297,6 +307,16 @@ export function WorkbenchApp() {
             )}
             {running ? (awaitingConfirm ? '待确认' : '执行中…') : '运行'}
           </button>
+          {running && (
+            <button
+              className="wb-toolbar__btn wb-toolbar__stop"
+              onClick={stopRun}
+              title="停止当前运行（中断后续节点）"
+            >
+              <span className="wb-stop-square" />
+              <span>停止</span>
+            </button>
+          )}
           <button
             className="wb-toolbar__btn"
             onClick={reset}

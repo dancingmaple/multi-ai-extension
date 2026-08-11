@@ -285,6 +285,29 @@ body,
     transform: rotate(360deg);
   }
 }
+.wb-toolbar__stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: rgba(244, 63, 94, 0.16);
+  border: 1px solid rgba(244, 63, 94, 0.5);
+  color: #fda4af;
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+.wb-toolbar__stop:hover {
+  background: rgba(244, 63, 94, 0.28);
+}
+.wb-stop-square {
+  width: 11px;
+  height: 11px;
+  background: #f43f5e;
+  border-radius: 2px;
+}
 
 /* ── 主区域：画布 + 内嵌执行面板并排 ─────────────── */
 .wb-main {

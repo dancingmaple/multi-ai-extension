@@ -35,9 +35,9 @@ export function renderTemplate(
   });
 }
 
-/** 是否为合法的变量名（合法标识符：字母/中文开头，后接字母/数字/下划线/连字符/中文） */
+/** 是否为合法的变量名（合法标识符：字母/中文开头，后接字母/数字/下划线/连字符/中文；不允许点号，避免与 .output 后缀语法冲突 #39） */
 export function isValidVarName(name: string): boolean {
-  return /^[A-Za-z_\u4e00-\u9fa5][A-Za-z0-9_.\u4e00-\u9fa5-]*$/.test(name);
+  return /^[A-Za-z_\u4e00-\u9fa5][A-Za-z0-9_\u4e00-\u9fa5-]*$/.test(name);
 }
 
 /** 提取模板中引用的 key 列表（含节点 ID 与变量名，去重，保持出现顺序） */

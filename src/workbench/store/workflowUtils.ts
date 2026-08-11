@@ -278,6 +278,37 @@ export function topoOrder(nodes: WBNode[], edges: Edge[]): WBNode[] {
   return order.map((id) => nodes.find((n) => n.id === id)!).filter(Boolean);
 }
 
+/**
+ * 检测环路依赖：返回所有处于环路中的节点 id（拓扑排序无法访问到的节点）。
+ * 用于运行前守卫，避免环路导致工作流无法执行/死循环（#35）。
+ */
+export function detectCycle(nodes: WBNode[], edges: Edge[]): string[] {
+  const indeg = new Map<string, number>();
+  const adj = new Map<string, string[]>();
+  nodes.forEach((n) => {
+    indeg.set(n.id, 0);
+    adj.set(n.id, []);
+  });
+  edges.forEach((e) => {
+    if (indeg.has(e.target) && adj.has(e.source)) {
+      indeg.set(e.target, (indeg.get(e.target) ?? 0) + 1);
+      adj.get(e.source)!.push(e.target);
+    }
+  });
+  const queue = nodes.filter((n) => (indeg.get(n.id) ?? 0) === 0).map((n) => n.id);
+  const seen = new Set<string>();
+  while (queue.length) {
+    const id = queue.shift()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    for (const nxt of adj.get(id) ?? []) {
+      indeg.set(nxt, (indeg.get(nxt) ?? 0) - 1);
+      if ((indeg.get(nxt) ?? 0) === 0) queue.push(nxt);
+    }
+  }
+  return nodes.filter((n) => !seen.has(n.id)).map((n) => n.id);
+}
+
 /** 取从 startId 出发可达的全部后代节点 id（含自身） */
 export function descendants(startId: string, edges: Edge[]): Set<string> {
   const adj = new Map<string, string[]>();
