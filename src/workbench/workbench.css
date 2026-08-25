@@ -606,13 +606,22 @@ textarea.wb-input {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-/* 提示词 + 引用上游 */
+/* 提示词 + 引用上游 + 模板 */
 .wb-prompt-wrap {
   position: relative;
 }
+.wb-prompt-acts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+  flex-wrap: wrap;
+}
+.wb-prompt-acts .wb-ref {
+  margin-top: 0;
+}
 .wb-ref {
   position: relative;
-  margin-top: 5px;
 }
 .wb-ref__btn {
   background: rgba(30, 41, 59, 0.6);

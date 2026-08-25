@@ -11,6 +11,7 @@ import { PROVIDER_LABELS } from '@shared/constants';
 import { useEffectiveProviders } from '@shared/useEffectiveProviders';
 import { isValidVarName } from '../../utils/template';
 import type { ProviderName } from '@shared/types';
+import { PromptTemplateMenu } from '@shared/PromptTemplateMenu';
 import {
   SparkIcon,
   TerminalIcon,
@@ -246,6 +247,23 @@ export const NodeShell = memo(function NodeShell({
       hasOutput: !!(n.data.output && n.data.output.length > 0),
     }));
 
+  // 模板一键填充：在提示词光标处插入模板正文（不覆盖已有内容，与「引用上游」一致）
+  const applyTemplate = (content: string) => {
+    const ta = promptRef.current;
+    const start = ta?.selectionStart ?? data.prompt.length;
+    const end = ta?.selectionEnd ?? data.prompt.length;
+    const next = data.prompt.slice(0, start) + content + data.prompt.slice(end);
+    setPromptDraft(next);
+    updateNodeData(id, { prompt: next });
+    requestAnimationFrame(() => {
+      if (ta) {
+        ta.focus();
+        const pos = start + content.length;
+        ta.setSelectionRange(pos, pos);
+      }
+    });
+  };
+
   return (
     <div className={`wb-node wb-node--${accent} ${selected ? 'ring-2 ring-sky-400' : ''}`}>
       {showTarget && <Handle type="target" position={Position.Left} />}
@@ -310,40 +328,44 @@ export const NodeShell = memo(function NodeShell({
               }}
               placeholder="支持 {{node_id.output}} 引用上游输出"
             />
-            {refCandidates.length > 0 && (
-              <div className="wb-ref">
-                <button
-                  type="button"
-                  className="wb-ref__btn nodrag"
-                  title="引用其它节点的输出到当前光标"
-                  onClick={() => setRefOpen((v) => !v)}
-                >
-                  <PlusIcon size={11} />
-                  引用上游
-                </button>
-                {refOpen && (
-                  <div className="wb-ref__menu">
-                    {refCandidates.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        className="wb-ref__item"
-                        title={`插入 {{${c.ref}}}（${c.label}）`}
-                        onClick={() => insertRef(c.ref)}
-                      >
-                        <code>{`{{${c.ref}}}`}</code>
-                        <span className="wb-ref__name">{c.label}</span>
-                        {c.hasOutput ? (
-                          <span className="wb-ref__ok">有输出</span>
-                        ) : (
-                          <span className="wb-ref__none">待运行</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+            <div className="wb-prompt-acts">
+              {refCandidates.length > 0 && (
+                <div className="wb-ref">
+                  <button
+                    type="button"
+                    className="wb-ref__btn nodrag"
+                    title="引用其它节点的输出到当前光标"
+                    onClick={() => setRefOpen((v) => !v)}
+                  >
+                    <PlusIcon size={11} />
+                    引用上游
+                  </button>
+                  {refOpen && (
+                    <div className="wb-ref__menu">
+                      {refCandidates.map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          className="wb-ref__item"
+                          title={`插入 {{${c.ref}}}（${c.label}）`}
+                          onClick={() => insertRef(c.ref)}
+                        >
+                          <code>{`{{${c.ref}}}`}</code>
+                          <span className="wb-ref__name">{c.label}</span>
+                          {c.hasOutput ? (
+                            <span className="wb-ref__ok">有输出</span>
+                          ) : (
+                            <span className="wb-ref__none">待运行</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* 提示词模板：搜索/添加/一键填充（与侧边栏、测试台共用同一份存储），点击在光标处插入 */}
+              <PromptTemplateMenu currentPrompt={data.prompt} onPick={applyTemplate} direction="down" />
+            </div>
           </div>
         )}
 

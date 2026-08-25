@@ -26,6 +26,18 @@ export interface CustomProvider {
 
 export type CustomProviderMap = Record<string, CustomProvider>;
 
+/** 提示词模板（侧边栏 / 测试台 / 工作台三处共用，存 chrome.storage.local） */
+export interface PromptTemplate {
+  /** 唯一 id，形如 pt_xxx */
+  id: string;
+  /** 模板名（列表搜索也匹配它） */
+  name: string;
+  /** 模板正文（一键填充到输入框） */
+  content: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export type ProviderStatus =
   | 'idle'
   | 'waiting'

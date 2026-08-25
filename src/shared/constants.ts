@@ -116,6 +116,9 @@ export const CUSTOM_SELECTORS_KEY = 'multiAI.customSelectors';
 // 用户自定义 AI 网页（测试台录入后成为新的 AI 节点）永久存储键
 export const CUSTOM_PROVIDERS_KEY = 'multiAI.customProviders';
 
+// 提示词模板（侧边栏/测试台/工作台共用）永久存储键
+export const PROMPT_TEMPLATES_KEY = 'multiAI.promptTemplates';
+
 /** 自定义 provider id 前缀 */
 export const CUSTOM_PROVIDER_PREFIX = 'custom:';
 

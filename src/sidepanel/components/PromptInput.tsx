@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef } from 'react';
 import { useStore } from '../store';
 import type { ProviderName } from '../../shared/types';
 import { useEffectiveProviders } from '../../shared/useEffectiveProviders';
+import { PromptTemplateMenu } from '../../shared/PromptTemplateMenu';
 import styles from './PromptInput.module.css';
 
 const PromptInput: React.FC = () => {
@@ -73,20 +74,28 @@ const PromptInput: React.FC = () => {
             );
           })}
         </div>
-        <button
-          className={`${styles.sendBtn} ${canSend ? styles.sendBtnReady : ''}`}
-          onClick={handleSend}
-          disabled={!canSend}
-        >
-          {isLoading ? (
-            <span className={styles.spinner} />
-          ) : (
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="22" y1="2" x2="11" y2="13" />
-              <polygon points="22 2 15 22 11 13 2 9 22 2" />
-            </svg>
-          )}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          {/* 提示词模板：搜索/添加/一键填充（与测试台、工作台共用同一份存储） */}
+          <PromptTemplateMenu
+            currentPrompt={prompt}
+            onPick={(content) => setPrompt(content)}
+            direction="up"
+          />
+          <button
+            className={`${styles.sendBtn} ${canSend ? styles.sendBtnReady : ''}`}
+            onClick={handleSend}
+            disabled={!canSend}
+          >
+            {isLoading ? (
+              <span className={styles.spinner} />
+            ) : (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+            )}
+          </button>
+        </div>
       </div>
     </div>
   );

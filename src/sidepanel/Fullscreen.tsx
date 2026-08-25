@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from './store';
 import type { Turn, Conversation } from '../shared/types';
 import { useEffectiveProviders } from '../shared/useEffectiveProviders';
+import { PromptTemplateMenu } from '../shared/PromptTemplateMenu';
 import WebView from './WebView';
 import styles from './Fullscreen.module.css';
 import { THEME_ICON, THEME_ORDER } from './theme';
@@ -180,9 +181,13 @@ const Fullscreen: React.FC = () => {
               );
             })}
           </div>
-          <button className={styles.sendBtn} onClick={handleSend} disabled={isLoading || !prompt.trim() || selectedProviders.length === 0}>
-            {isLoading ? '获取中…' : '一键获取并查看 ▶'}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            {/* 提示词模板：搜索/添加/一键填充（与侧边栏、测试台、工作台共用） */}
+            <PromptTemplateMenu currentPrompt={prompt} onPick={(content) => setPrompt(content)} direction="up" />
+            <button className={styles.sendBtn} onClick={handleSend} disabled={isLoading || !prompt.trim() || selectedProviders.length === 0}>
+              {isLoading ? '获取中…' : '一键获取并查看 ▶'}
+            </button>
+          </div>
         </div>
       </footer>
 

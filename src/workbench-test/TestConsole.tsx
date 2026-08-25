@@ -22,6 +22,7 @@ import {
   newCustomProviderId,
   getCustomProvider,
 } from '../shared/customProviders';
+import { PromptTemplateMenu } from '../shared/PromptTemplateMenu';
 
 /** 尚未保存的自定义网页用这个占位 id 与 content script 通信 */
 const DRAFT = 'custom:draft';
@@ -556,6 +557,8 @@ export function TestConsole() {
             <button className="tc-btn" disabled={diagLoading} onClick={runDiagnose}>
               {diagLoading ? '诊断中…' : '🔬 诊断页面'}
             </button>
+            {/* 提示词模板：搜索/添加/一键填充（与侧边栏、工作台共用同一份存储） */}
+            <PromptTemplateMenu currentPrompt={prompt} onPick={(content) => setPrompt(content)} direction="down" />
             <button className="tc-btn tc-btn--ghost" onClick={() => setLogs([])}>
               清空日志
             </button>
