@@ -7,8 +7,11 @@ import { QwenAdapter } from './adapters/qwen';
 import { ZaiAdapter } from './adapters/zai';
 import { DoubaoAdapter } from './adapters/doubao';
 import { KimiAdapter } from './adapters/kimi';
+import { CustomAdapter } from './adapters/custom';
 import { LoginRequiredError } from '../shared/utils';
-import { SETTINGS_KEY, DEFAULT_SETTINGS } from '../shared/constants';
+import { SETTINGS_KEY, DEFAULT_SETTINGS, isCustomProvider } from '../shared/constants';
+import { getCustomForProvider } from '../shared/customSelectors';
+import { getCustomProvider } from '../shared/customProviders';
 
 const adapters: Record<ProviderName, SiteAdapter> = {
   chatgpt: new ChatGPTAdapter(),
@@ -37,6 +40,31 @@ export function clearSettingsCache(): void {
   cachedSettings = null;
 }
 
+// 设置变更时让缓存自动失效，用户改 settings 无需重载扩展即可生效（#25）
+if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes[SETTINGS_KEY]) cachedSettings = null;
+  });
+}
+
+/**
+ * 取适配器：内置 7 家用专属适配器；`custom:` 开头的自定义节点
+ * 用通用 CustomAdapter，选择器来自用户点选后保存的记录。
+ */
+async function resolveAdapter(provider: ProviderName): Promise<SiteAdapter | null> {
+  const builtin = adapters[provider];
+  if (builtin) return builtin;
+  if (!isCustomProvider(provider)) return null;
+  let sel: { input?: string; submit?: string; response?: string } | undefined;
+  try {
+    const c = await getCustomProvider(provider);
+    if (c) sel = { input: c.inputSelector, submit: c.submitSelector, response: c.responseSelector };
+  } catch {
+    /* 草稿节点尚未落库，只靠 customSelectors */
+  }
+  return new CustomAdapter(provider, sel);
+}
+
 export async function executePrompt(
   msg: ExecutePromptMessage,
   sendStatus: (status: string, detail?: string) => void,
@@ -44,7 +72,7 @@ export async function executePrompt(
   sendDone: (finalContent: string) => void,
   sendError: (code: string, message: string) => void
 ): Promise<void> {
-  const adapter = adapters[msg.provider];
+  const adapter = await resolveAdapter(msg.provider);
   if (!adapter) {
     sendError('UNKNOWN_PROVIDER', `Unknown provider: ${msg.provider}`);
     return;
@@ -52,6 +80,17 @@ export async function executePrompt(
 
   const settings = await loadSettings();
   adapter.setTimeouts(settings);
+
+  // 应用手动修复的自定义选择器（来自测试台点选保存）
+  try {
+    const custom = await getCustomForProvider(msg.provider);
+    if (custom) {
+      adapter.setCustomSelectors(custom);
+      console.log('[MultiAI:executor] 使用自定义选择器', msg.provider, custom);
+    }
+  } catch {
+    /* ignore */
+  }
 
   console.log('[MultiAI:executor] Starting execution for', msg.provider, 'prompt:', msg.prompt.substring(0, 80));
 

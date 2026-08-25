@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { useStore } from '../store';
 import { PROVIDER_LABELS } from '../../shared/constants';
 import type { ProviderName } from '../../shared/types';
@@ -11,10 +11,6 @@ const AnswerModal: React.FC = () => {
   const conversation = useStore((s) => s.conversation);
   const closeReader = useStore((s) => s.closeReader);
   const switchReader = useStore((s) => s.switchReader);
-
-  const [hint, setHint] = useState(0); // 右键拖动视觉反馈位移
-  const [dragging, setDragging] = useState(false);
-  const startX = useRef(0);
 
   const provider: ProviderName | undefined = reader.providers[reader.index];
 
@@ -62,36 +58,13 @@ const AnswerModal: React.FC = () => {
     return task?.providers[provider]?.url;
   })();
 
-  const html = renderMarkdown(content);
-
-  const onContextMenu = (e: React.MouseEvent) => e.preventDefault();
-
-  const onMouseDown = (e: React.MouseEvent) => {
-    if (e.button === 2) {
-      e.preventDefault();
-      setDragging(true);
-      startX.current = e.clientX;
-    }
-  };
-  const onMouseMove = (e: React.MouseEvent) => {
-    if (!dragging) return;
-    setHint(e.clientX - startX.current);
-  };
-  const endDrag = () => {
-    if (!dragging) return;
-    if (hint <= -40) switchReader(1);
-    else if (hint >= 40) switchReader(-1);
-    setDragging(false);
-    setHint(0);
-  };
+  // 流式期间每 token 重渲染，markdown 渲染较重 → 仅 content 变化时重算（#56）
+  const html = useMemo(() => renderMarkdown(content), [content]);
 
   return (
-    <div className={styles.overlay} onMouseUp={endDrag} onMouseLeave={endDrag}>
+    <div className={styles.overlay}>
       <div
         className={styles.modal}
-        onContextMenu={onContextMenu}
-        onMouseDown={onMouseDown}
-        onMouseMove={onMouseMove}
         onClick={(e) => e.stopPropagation()}
       >
         {/* 顶部：模型切换 + 关闭 */}
@@ -113,10 +86,7 @@ const AnswerModal: React.FC = () => {
         </div>
 
         {/* 阅读区 */}
-        <div
-          className={styles.stage}
-          style={{ transform: hint ? `translateX(${hint * 0.25}px)` : undefined, transition: dragging ? 'none' : 'transform .2s' }}
-        >
+        <div className={styles.stage}>
           <div className={styles.docHead}>
             <span className={styles.docName}>{PROVIDER_LABELS[provider]}</span>
             <span className={styles.docIdx}>
@@ -141,7 +111,7 @@ const AnswerModal: React.FC = () => {
           <button className={styles.navBtn} onClick={() => switchReader(-1)} disabled={reader.providers.length < 2}>
             ← 上一个
           </button>
-          <span className={styles.hint}>按住鼠标右键左右拖动切换 · ← → 键 · Esc 关闭</span>
+          <span className={styles.hint}>← → 键切换 · Esc 关闭</span>
           <button className={styles.navBtn} onClick={() => switchReader(1)} disabled={reader.providers.length < 2}>
             下一个 →
           </button>

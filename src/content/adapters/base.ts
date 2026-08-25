@@ -1,4 +1,4 @@
-import type { ProviderName, AppSettings } from '../../shared/types';
+import type { ProviderName, AppSettings, ProviderCustomSelectors } from '../../shared/types';
 import { waitForElement, observeTextChanges, waitForStableText } from '../dom/observer';
 import { setNativeInputValue, setContentEditableValue, clickElement, LoginRequiredError, SubmitFailedError } from '../../shared/utils';
 import { ELEMENT_TIMEOUT_MS, STREAM_THROTTLE_MS, DONE_STABLE_MS } from '../../shared/constants';
@@ -16,6 +16,7 @@ export interface SiteAdapter {
     onError: (err: Error) => void
   ): () => void;
   setTimeouts(settings: AppSettings): void;
+  setCustomSelectors(c: ProviderCustomSelectors | null): void;
 }
 
 export abstract class BaseAdapter implements SiteAdapter {
@@ -25,9 +26,27 @@ export abstract class BaseAdapter implements SiteAdapter {
   abstract readonly responseSelectors: string[];
   abstract readonly loginSelectors: string[];
   protected timeoutSettings: AppSettings | null = null;
+  protected customSelectors: ProviderCustomSelectors | null = null;
 
   setTimeouts(settings: AppSettings): void {
     this.timeoutSettings = settings;
+  }
+
+  setCustomSelectors(c: ProviderCustomSelectors | null): void {
+    this.customSelectors = c && (c.input || c.submit || c.response) ? c : null;
+  }
+
+  /**
+   * 自定义选择器优先：手动修复 UI 变化后，用户点选的选择器排在最前。
+   */
+  protected get effectiveInputSelectors(): string[] {
+    return this.customSelectors?.input ? [this.customSelectors.input, ...this.inputSelectors] : this.inputSelectors;
+  }
+  protected get effectiveSubmitSelectors(): string[] {
+    return this.customSelectors?.submit ? [this.customSelectors.submit, ...this.submitSelectors] : this.submitSelectors;
+  }
+  protected get effectiveResponseSelectors(): string[] {
+    return this.customSelectors?.response ? [this.customSelectors.response, ...this.responseSelectors] : this.responseSelectors;
   }
 
   protected getElementTimeout(): number {
@@ -44,7 +63,7 @@ export abstract class BaseAdapter implements SiteAdapter {
 
   async isReady(): Promise<boolean> {
     try {
-      const el = await waitForElement(this.inputSelectors, 3000);
+      const el = await waitForElement(this.effectiveInputSelectors, 3000);
       return el !== null;
     } catch {
       return false;
@@ -52,28 +71,36 @@ export abstract class BaseAdapter implements SiteAdapter {
   }
 
   detectLoginRequired(): boolean {
+    // 1) 选择器命中（登录表单 / 按钮）
     for (const sel of this.loginSelectors) {
-      const el = document.querySelector(sel);
-      if (el) return true;
+      if (document.querySelector(sel)) return true;
     }
+    // 2) 文本模式：忽略大小写与空白，避免 '登录 Google' / 多空格漏判（#26）
     if (this.loginTextPatterns.length > 0) {
       const buttons = document.querySelectorAll('button, a');
       for (const btn of buttons) {
-        const text = btn.textContent?.trim() ?? '';
+        const text = (btn.textContent ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
         for (const pattern of this.loginTextPatterns) {
-          if (text === pattern) return true;
+          if (text.includes(pattern.toLowerCase())) return true;
         }
       }
+    }
+    // 3) href 含登录入口：严格正则，避免 '/docs/login-guide' 误判为登录页（#26）
+    const loginHrefRe = /(^|\/)(login|signin|sign-in|auth|oauth)(\/|$|\?|#)/i;
+    const links = document.querySelectorAll('a[href]');
+    for (const a of links) {
+      const href = a.getAttribute('href') ?? '';
+      if (loginHrefRe.test(href)) return true;
     }
     return false;
   }
 
   async waitForReady(timeoutMs?: number): Promise<void> {
-    await waitForElement(this.inputSelectors, timeoutMs ?? this.getElementTimeout());
+    await waitForElement(this.effectiveInputSelectors, timeoutMs ?? this.getElementTimeout());
   }
 
   async setPrompt(prompt: string): Promise<void> {
-    const el = await waitForElement(this.inputSelectors, this.getElementTimeout());
+    const el = await waitForElement(this.effectiveInputSelectors, this.getElementTimeout());
 
     if (this.detectLoginRequired()) {
       throw new LoginRequiredError(this.provider);
@@ -97,7 +124,7 @@ export abstract class BaseAdapter implements SiteAdapter {
 
   async submit(): Promise<void> {
     // Use shorter timeout for submit — button should already exist after setPrompt
-    const btn = await waitForElement(this.submitSelectors, 5000);
+    const btn = await waitForElement(this.effectiveSubmitSelectors, 5000);
     if (!(btn instanceof HTMLElement)) {
       throw new SubmitFailedError(this.provider, 'Submit button not an HTMLElement');
     }
@@ -116,7 +143,7 @@ export abstract class BaseAdapter implements SiteAdapter {
       const elTimeout = this.getElementTimeout();
       // Try primary selectors first with reduced timeout
       try {
-        return await waitForElement(this.responseSelectors, elTimeout);
+        return await waitForElement(this.effectiveResponseSelectors, elTimeout);
       } catch {
         // Fallback: try finding any markdown or content container
         const broad = [

@@ -1,0 +1,418 @@
+/* ============================================================
+   workbench-test/test.css - AI 请求/获取核心链路测试台样式
+   （深色工具风，与 workbench 设计语言一致）
+   ============================================================ */
+html,
+body,
+#test-root {
+  height: 100%;
+  margin: 0;
+}
+#test-root {
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-variant-numeric: tabular-nums;
+  background: #0a0f1c;
+  color: #e5e9f0;
+}
+*::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.4);
+  border-radius: 8px;
+}
+
+.tc-app {
+  display: flex;
+  height: 100%;
+}
+
+/* ── 左侧控制台 ── */
+.tc-panel {
+  width: 46%;
+  min-width: 420px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid rgba(148, 163, 184, 0.15);
+  background:
+    radial-gradient(900px 480px at 12% -8%, rgba(56, 189, 248, 0.06), transparent 60%),
+    #0d1424;
+}
+.tc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 700;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+.tc-logo {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #0ea5e9, #38bdf8);
+  color: #04121f;
+  font-size: 13px;
+}
+
+.tc-form {
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+.tc-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.tc-label {
+  font-size: 11px;
+  color: #7d8aa0;
+  font-weight: 600;
+}
+.tc-select {
+  height: 32px;
+  background: #0b1222;
+  color: #e5e9f0;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.tc-select:focus {
+  outline: none;
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 2.5px rgba(56, 189, 248, 0.18);
+}
+.tc-textarea {
+  background: #0b1222;
+  color: #e5e9f0;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.55;
+  resize: vertical;
+}
+.tc-textarea:focus {
+  outline: none;
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 2.5px rgba(56, 189, 248, 0.18);
+}
+.tc-acts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.tc-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(30, 41, 59, 0.6);
+  color: #c6d0e0;
+  border-radius: 8px;
+  padding: 7px 15px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.tc-btn:hover:not(:disabled) {
+  background: rgba(51, 65, 85, 0.8);
+  color: #f1f5f9;
+}
+.tc-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.tc-btn--primary {
+  background: #0ea5e9;
+  border-color: #0ea5e9;
+  color: #04121f;
+}
+.tc-btn--primary:hover:not(:disabled) {
+  background: #38bdf8;
+}
+.tc-btn--ghost {
+  background: transparent;
+}
+
+/* 日志 */
+.tc-logs {
+  flex: 1;
+  overflow: auto;
+  padding: 10px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+.tc-logs-empty {
+  color: #55637a;
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.7;
+}
+.tc-log {
+  display: flex;
+  gap: 8px;
+  line-height: 1.55;
+  word-break: break-all;
+  border-radius: 5px;
+  padding: 2px 6px;
+}
+.tc-log--info {
+  color: #a9b6cc;
+}
+.tc-log--ok {
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.08);
+}
+.tc-log--warn {
+  color: #fbbf24;
+}
+.tc-log--err {
+  color: #fb7185;
+  background: rgba(244, 63, 94, 0.08);
+}
+.tc-log-ts {
+  color: #55637a;
+  flex-shrink: 0;
+}
+
+/* 结果对比 */
+.tc-results {
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  padding: 10px 16px;
+  max-height: 36%;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.tc-result {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 9px;
+  overflow: hidden;
+  background: #0b1222;
+}
+.tc-result__head {
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+.tc-result__head--auto {
+  color: #7dd3fc;
+  background: rgba(56, 189, 248, 0.08);
+}
+.tc-result__head--grab {
+  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.08);
+}
+.tc-result__body {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 130px;
+  overflow: auto;
+  color: #e5e9f0;
+}
+
+/* ── 页面诊断面板 ── */
+.tc-diag {
+  border: 1px solid rgba(45, 212, 191, 0.25);
+  border-radius: 9px;
+  overflow: hidden;
+  background: #07140f;
+  margin-top: 2px;
+}
+.tc-diag__head {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #5eead4;
+  background: rgba(45, 212, 191, 0.1);
+  border-bottom: 1px solid rgba(45, 212, 191, 0.18);
+}
+.tc-diag__summary {
+  padding: 5px 10px;
+  font-size: 10px;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+}
+.tc-diag__details {
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+.tc-diag__details > summary {
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #cbd5e1;
+  user-select: none;
+}
+.tc-diag__details > summary:hover {
+  background: rgba(148, 163, 184, 0.06);
+}
+.tc-diag__pre {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 220px;
+  overflow: auto;
+  color: #a5f3fc;
+  background: #050b09;
+}
+
+/* ── 右侧 iframe 预览 ── */
+.tc-preview {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: #0b1222;
+}
+.tc-preview__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 14px;
+  font-size: 12px;
+  color: #a9b6cc;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  background: #0d1424;
+}
+.tc-preview__head b {
+  color: #7dd3fc;
+}
+.tc-preview__open {
+  color: #38bdf8;
+  font-size: 11px;
+  text-decoration: none;
+}
+.tc-preview__open:hover {
+  text-decoration: underline;
+}
+.tc-preview__frame {
+  flex: 1;
+  width: 100%;
+  border: none;
+  background: #fff;
+}
+
+/* ── 手动修复元素定位 ── */
+.tc-pick {
+  padding: 12px 16px 14px;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(15, 23, 42, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tc-pick__title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #c6d0e0;
+  flex-wrap: wrap;
+}
+.tc-pick__hint {
+  font-size: 10px;
+  font-weight: 500;
+  color: #64748b;
+}
+.tc-pick__btns {
+  display: flex;
+  gap: 8px;
+}
+.tc-pick__btn {
+  flex: 1;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(30, 41, 59, 0.6);
+  color: #c6d0e0;
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.tc-pick__btn:hover {
+  background: rgba(51, 65, 85, 0.8);
+  color: #f1f5f9;
+}
+.tc-pick__btn.is-active {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  color: #1a1205;
+  animation: tc-pulse 1.1s ease-in-out infinite;
+}
+@keyframes tc-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5); }
+  50% { box-shadow: 0 0 0 5px rgba(245, 158, 11, 0); }
+}
+.tc-pick__list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.tc-pick__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #0b1222;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 7px;
+  padding: 5px 8px;
+}
+.tc-pick__role {
+  font-size: 10px;
+  font-weight: 700;
+  color: #7dd3fc;
+  flex-shrink: 0;
+  width: 48px;
+}
+.tc-pick__sel {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  color: #a9b6cc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tc-pick__del {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: rgba(244, 63, 94, 0.15);
+  color: #fb7185;
+  border-radius: 5px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.tc-pick__del:hover {
+  background: rgba(244, 63, 94, 0.3);
+}

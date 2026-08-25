@@ -36,6 +36,19 @@ export function getTask(taskId: string): AskTaskState | undefined {
   return tasks.get(taskId);
 }
 
+/**
+ * 删除一个任务（工作台 wb_ 任务完成后调用，防止 tasks Map 与 lastTask 无限膨胀）。
+ * 若 lastTask 恰是该任务则一并清除，否则保留最近一次供侧边栏恢复。
+ */
+export function deleteTask(taskId: string): void {
+  tasks.delete(taskId);
+  void chrome.storage.local.get('lastTask').then((r) => {
+    if ((r.lastTask as AskTaskState | undefined)?.taskId === taskId) {
+      chrome.storage.local.remove('lastTask').catch(() => {});
+    }
+  }).catch(() => {});
+}
+
 export function updateProviderStatus(
   taskId: string,
   provider: ProviderName,

@@ -44,20 +44,41 @@ export function extractAnswer(pageText: string, prompt: string): GrabResult {
     return arr;
   };
 
-  // 1) 剪刀法：从后定位最后一次提问，取其后
-  const key = (prompt || '').replace(/\s/g, '').slice(0, 12);
+  // 1) 剪刀法：从后定位最后一次提问，取其后。
+  // key 加长到 32 字符（#58）：短问题（slice(0,12)）极易在正文偶然命中，
+  // 误把后面整段回答当提问裁掉；优先匹配「用户：/你：/You:」等提问前缀行更可信。
+  const key = (prompt || '').replace(/\s/g, '').slice(0, 32);
   let q = -1;
   if (key) {
+    const USER_PREFIX_RE = /^(用户|你|我|问|Q|You|User)[:：]|^>\s/;
     for (let i = lines.length - 1; i >= 0; i--) {
       if (lines[i].replace(/\s/g, '').includes(key)) {
-        q = i;
-        break;
+        q = i; // 命中即记录；优先保留更靠后且带提问前缀的
+        if (USER_PREFIX_RE.test(lines[i])) break;
       }
     }
   }
+
+  /**
+   * 改进的 STOP 截断：要求**连续 3 行**都匹配 STOP 模式才截断，
+   * 避免正文中某一行偶然命中 footer 关键词就把整个后半段回答丢掉。
+   */
+  const findStopIndex = (arr: string[]): number => {
+    let consecutive = 0;
+    for (let i = 0; i < arr.length; i++) {
+      if (STOP_FOOTER.test(arr[i])) {
+        consecutive++;
+        if (consecutive >= 3) return i - 2;
+      } else {
+        consecutive = 0;
+      }
+    }
+    return -1;
+  };
+
   if (q >= 0 && q < lines.length - 1) {
     const rawBody = lines.slice(q + 1);
-    const stopIdx = rawBody.findIndex((l) => STOP_FOOTER.test(l));
+    const stopIdx = findStopIndex(rawBody);
     const body = trimHeadTail(stopIdx >= 0 ? rawBody.slice(0, stopIdx) : rawBody)
       .join('\n')
       .trim();
@@ -66,7 +87,7 @@ export function extractAnswer(pageText: string, prompt: string): GrabResult {
 
   // 2) 兜底：取页面后半段（回答通常在下方），宁可多带上下文也不抓空
   const rawHalf = lines.slice(Math.floor(lines.length / 2));
-  const stopIdx2 = rawHalf.findIndex((l) => STOP_FOOTER.test(l));
+  const stopIdx2 = findStopIndex(rawHalf);
   const half = trimHeadTail(stopIdx2 >= 0 ? rawHalf.slice(0, stopIdx2) : rawHalf)
     .join('\n')
     .trim();

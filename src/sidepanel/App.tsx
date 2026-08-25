@@ -7,9 +7,7 @@ import WebView from './WebView';
 import type { BackgroundToUIMessage, ExportLayout, ExportSink } from '../shared/types';
 import styles from './App.module.css';
 import './theme.css';
-
-const THEME_ICON: Record<string, string> = { light: '☀', dark: '🌙', auto: '🌗' };
-const THEME_ORDER = ['light', 'dark', 'auto'] as const;
+import { THEME_ICON, THEME_ORDER } from './theme';
 
 const App: React.FC = () => {
   const setTask = useStore((s) => s.setTask);
@@ -86,7 +84,8 @@ const App: React.FC = () => {
           (p) => p.status === 'done' || p.status === 'error' || p.status === 'login_required' || p.status === 'idle'
         );
         if (allDone) {
-          useStore.setState({ isLoading: false });
+          // 走 action 而非直接 setState，确保 5 分钟兜底计时器一并撤销（#30）
+          useStore.getState().finishLoading();
           loadHistory();
         }
       }

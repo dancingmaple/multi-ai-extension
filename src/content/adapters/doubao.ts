@@ -2,6 +2,9 @@ import type { ProviderName } from '../../shared/types';
 import { BaseAdapter } from './base';
 import { SubmitFailedError } from '../../shared/utils';
 import { extractAnswer } from '../../shared/grab';
+import { observeDocumentThrottled } from '../dom/observer';
+import { PLACEHOLDER_RE } from '../../shared/constants';
+import { createLogger } from '../../shared/debug';
 
 /* ============================================================
    豆包适配器 · inner-v2（写入闭环 + 提交闭环）
@@ -39,7 +42,6 @@ const CONFIG = {
 
   /* 抓取相关 */
   PROGRESS: /(思考中|搜索中|联网搜索中|生成中|正在搜索|正在思考|正在阅读|正在联网|Searching(?! for)|Reading\s+\d)/i,
-  PLACEHOLDER_RE: /^[.…·••\s…\u2026\u00b7]*$/,
 
   HARD_STABLE: 2500, SOFT_STABLE: 6000, ABS_CAP: 12000,
   HARD_TIMEOUT: 75000,
@@ -49,10 +51,9 @@ const CONFIG = {
   /* 写入/提交闭环参数 */
   WRITE_VERIFY_MS: 130,      // 每种写法后等多久再回读
   SUBMIT_VERIFY_MS: 750,     // 每种提交方式后等多久再验证
-  DEBUG: true,
 };
 
-const log = (...a: unknown[]) => { if (CONFIG.DEBUG) console.log('[Doubao:adapter]', ...a); };
+const log = createLogger('[Doubao:adapter]');
 
 /* ---------- DOM 工具 ---------- */
 function isVisible(el: Element | null): boolean {
@@ -116,7 +117,10 @@ function writeOk(el: HTMLElement, prompt: string): boolean {
 }
 
 /* 收集发送按钮候选：精确 > 语义 > 输入框同容器；按页面 x 坐标最右优先，并排除工具菜单 */
-const EXCLUDED_BTN_TEXT_RE = /^(更多|工具|\+)$/;
+const EXCLUDED_BTN_TEXT_RE = /^(更多|工具|\+|上传|附件|图片|文件|语音|录音|清空|新对话|新建对话|停止|深度思考|联网搜索|技能)$/;
+/** 明确「不是发送」的功能键特征（aria-label / data-testid / title）（#49） */
+const NON_SEND_HINT_RE =
+  /(upload|attach|file|image|photo|voice|audio|record|microphone|mic|stop|clear|new[\s-]?chat|setting|上传|附件|图片|文件|语音|录音|麦克风|停止|清空|新建|设置)/i;
 function btnScore(btn: HTMLElement): number {
   // 精确发送按钮最高优先级
   if (btn.getAttribute('data-testid') === 'chat_input_send_button') return 10000;
@@ -136,7 +140,15 @@ function isSendButton(el: HTMLElement): boolean {
   if (el.getAttribute('data-testid') === 'chat_input_send_button') return true;
   const aria = (el.getAttribute('aria-label') || '').toLowerCase();
   if (aria.includes('send') || aria.includes('发送')) return true;
-  return true; // 兜底：只要在同容器且不是"更多"都纳入候选
+
+  // 以下为 #49 收紧：原先无条件 return true，导致同容器里的附件 / 语音 /
+  // 深度思考 等功能键也被当作发送候选，误点后会打开面板或切换模式。
+  const hint = `${aria} ${el.getAttribute('data-testid') || ''} ${el.getAttribute('title') || ''}`;
+  if (NON_SEND_HINT_RE.test(hint)) return false;
+  // 开关型控件（深度思考 / 联网搜索）不是发送键
+  if (el.getAttribute('role') === 'switch' || el.hasAttribute('aria-pressed')) return false;
+  // 兜底仅接受「图标按钮」：发送键通常无文案或仅「发送」二字
+  return text.length <= 2;
 }
 function collectSendButtons(): HTMLElement[] {
   const exact = document.querySelector('button[data-testid="chat_input_send_button"]') as HTMLElement | null;
@@ -337,7 +349,7 @@ export class DoubaoAdapter extends BaseAdapter {
       const text = grabText();
       if (!started && text.length > gateLen + 12) { started = true; log('GATE OPEN len', text.length, '>', gateLen); }
       const real = started ? localExtractAnswer(text, prompt) : '';
-      const isPlaceholder = !real || CONFIG.PLACEHOLDER_RE.test(real);
+      const isPlaceholder = !real || PLACEHOLDER_RE.test(real);
       const body = isPlaceholder ? '' : real;
       const show = body || (started ? CONFIG.THINKING_PLACEHOLDER : '');
       if (show && show !== lastSent && now - lastEmit >= CONFIG.STREAM_THROTTLE_MS) { lastSent = show; lastEmit = now; onUpdate(show); }
@@ -357,15 +369,15 @@ export class DoubaoAdapter extends BaseAdapter {
       if (now - t0 >= CONFIG.HARD_TIMEOUT) {
         stopped = true; cleanup();
         const final = localExtractAnswer(grabText(), prompt);
-        if (final && !CONFIG.PLACEHOLDER_RE.test(final)) { log('HARD_TIMEOUT 有正文'); onDone(final); }
+        if (final && !PLACEHOLDER_RE.test(final)) { log('HARD_TIMEOUT 有正文'); onDone(final); }
         else { log('HARD_TIMEOUT 无正文'); onError(new Error('StreamTimeoutError: 超时未抓到回答，可点重发')); }
       }
     };
 
-    const mo = new MutationObserver(() => { if (!stopped) tick(); });
-    mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+    // 合并节流：流式期间站点每秒数百条 mutation，逐条跑 tick 会打满 CPU（#7）
+    const stopObserve = observeDocumentThrottled(() => { if (!stopped) tick(); });
     const poll = window.setInterval(tick, CONFIG.POLL_MS);
-    function cleanup() { mo.disconnect(); clearInterval(poll); }
+    function cleanup() { stopObserve(); clearInterval(poll); }
     tick();
     return cleanup;
   }

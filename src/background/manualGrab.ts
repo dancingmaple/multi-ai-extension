@@ -6,6 +6,7 @@ import {
   finishProviderTask,
   failProviderTask,
 } from './stateStore';
+import { getRegisteredTabId } from './tabManager';
 import { broadcastTaskState } from '../shared/messaging';
 import { upsertAnswer } from './conversationStore';
 
@@ -23,6 +24,11 @@ const DOMAIN_PATTERN: Record<string, string> = {
  * 注入函数（必须自包含，不依赖任何模块/import）：
  * 读整页可见文本 → 用提问当剪刀剪出回答 → 剪不到兜底取页面后半段 →
  * 裁掉头尾元信息 + 页面 footer/免责声明。宁可抓糙，绝不抓空。
+ *
+ * [2026-08 修复] 解决 ChatGPT 等长回答「只抓到中间一段」的问题：
+ *   1) 选择器不再硬编码 turn 编号，改为动态查找最后一条 assistant 消息；
+ *   2) 对滚动容器先临时滚到顶再读 innerText，恢复原位——解决 .innerText 只返回可见文本的浏览器特性；
+ *   3) STOP 截断改为「连续 N 行匹配才截断」，避免正文内部误切。
  */
 function grabInPage(args: { prompt: string; provider?: string }): { text: string; method: string; reason?: string } {
   const HEAD =
@@ -40,7 +46,47 @@ function grabInPage(args: { prompt: string; provider?: string }): { text: string
     return s.visibility !== 'hidden' && s.display !== 'none' && +s.opacity > 0.01;
   }
 
-  function pickRoot(): HTMLElement {
+  /**
+   * 块级感知的全文提取（核心修复）：直接遍历 DOM 子树，拼接所有文本节点，
+   * 在块级元素前插入换行——效果等同 textContent 但保留段落结构。
+   *
+   * 为什么不用 .innerText：innerText 是「渲染文本」，对虚拟化 / overflow 滚动 /
+   * 栅格布局的容器只返回当前布局内可见的文本，长回答必然被截断成「中间一段」。
+   * 而 textContent（本函数用 DOM 遍历实现）返回子树全部文本，永不因滚动或可见性丢失，
+   * 这才是 ChatGPT 等长回答能抓全的根基。
+   */
+  const BLOCK_TAGS = new Set([
+    'P', 'DIV', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BR', 'TR', 'SECTION',
+    'ARTICLE', 'BLOCKQUOTE', 'PRE', 'UL', 'OL', 'TABLE', 'THEAD', 'TBODY', 'TD', 'TH',
+  ]);
+  const SKIP_TAGS = new Set(['BUTTON', 'SVG', 'IMG', 'INPUT', 'TEXTAREA', 'SELECT', 'SCRIPT', 'STYLE', 'NOSCRIPT', 'PATH']);
+  function blockText(el: HTMLElement): string {
+    let out = '';
+    const walk = (node: Node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        out += node.textContent || '';
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      const e = node as HTMLElement;
+      const tag = e.tagName;
+      if (tag === 'BR') {
+        out += '\n';
+        return;
+      }
+      if (SKIP_TAGS.has(tag)) return;
+      const s = getComputedStyle(e);
+      if (s.display === 'none' || s.visibility === 'hidden' || +s.opacity === 0) return;
+      const before = out.length;
+      for (const child of Array.from(e.childNodes)) walk(child);
+      // 块级元素后补换行（首元素不补）；inline 元素（含 code/a/span）不补，保持词语连贯
+      if (BLOCK_TAGS.has(tag) && out.length > before && !out.endsWith('\n')) out += '\n';
+    };
+    walk(el);
+    return out.replace(/\u00a0/g, ' ');
+  }
+
+  function pickRoot(): { el: HTMLElement; isAnswer: boolean } {
     const common = [
       '[data-testid="message-list"]',
       '.chat-messages',
@@ -51,26 +97,56 @@ function grabInPage(args: { prompt: string; provider?: string }): { text: string
       'main[class*="chat"]',
       'main',
     ];
-    const providerRoots: Record<string, string[]> = {
+    const providerRoots: Record<string, (string | (() => HTMLElement | null))[]> = {
       zai: ['.chat-content', '.message-list', '.chat-messages', '.conversation-content', 'main[class*="chat"]', 'main'],
       doubao: ['[data-testid="message-list"]', '.chat-messages', '.message-list', 'main'],
       gemini: ['.conversation-container', '.chat-container', 'main', 'body'],
-      chatgpt: ['[data-testid="conversation-turn-2"]', '.conversation-content', 'main', 'body'],
+      /** ChatGPT：动态查找最后一条 assistant 消息（整个元素就是完整回答） */
+      chatgpt: [
+        () => {
+          const turns = document.querySelectorAll('[data-testid^="conversation-turn-"][data-message-author-role="assistant"]');
+          if (turns.length > 0) return turns[turns.length - 1] as HTMLElement | null;
+          return null;
+        },
+        () => {
+          const all = document.querySelectorAll('[data-message-author-role="assistant"]');
+          return all.length > 0 ? (all[all.length - 1] as HTMLElement) : null;
+        },
+        '[data-message-author-role="assistant"]',
+        '.markdown.prose',
+        '.markdown',
+        '[class*="agent-turn"]',
+        '.conversation-content',
+        'main',
+        'body',
+      ],
       deepseek: ['.chat-messages', '.message-list', 'main', 'body'],
       qwen: ['.chat-messages', '.message-list', 'main', 'body'],
       kimi: ['.chat-content', '.message-list', '.chat-messages', '.conversation-content', 'main[class*="chat"]', 'main'],
     };
     const order = args.provider && providerRoots[args.provider] ? providerRoots[args.provider] : common;
     for (const s of order) {
-      const el = document.querySelector(s) as HTMLElement | null;
-      if (el && isVisible(el) && el.innerText.trim().length > 20) return el;
+      let el: HTMLElement | null = null;
+      if (typeof s === 'function') {
+        el = s();
+      } else {
+        el = document.querySelector(s) as HTMLElement | null;
+      }
+      if (el && isVisible(el) && blockText(el).trim().length > 20) {
+        // 命中 ChatGPT 的「最后一条 assistant turn」函数选择器 → 此元素就是完整回答
+        const isAnswer = args.provider === 'chatgpt' && typeof s === 'function';
+        return { el, isAnswer };
+      }
     }
-    return document.body;
+    return { el: document.body, isAnswer: false };
   }
 
   const clean = (s: string) => s.replace(/\u00a0/g, ' ');
-  const root = pickRoot();
-  const raw = clean(root.innerText || document.body.innerText || '');
+  const { el: root, isAnswer } = pickRoot();
+
+  // 用 blockText 取全文（DOM 遍历，永不因滚动/虚拟化丢失文本）
+  const raw = clean(blockText(root));
+
   const lines = raw.split('\n').map((s) => s.trim()).filter((s) => s.length > 0);
 
   const trimHeadTail = (arr: string[]) => {
@@ -79,23 +155,51 @@ function grabInPage(args: { prompt: string; provider?: string }): { text: string
     return arr;
   };
 
-  const key = (args.prompt || '').replace(/\s/g, '').slice(0, 12);
-  let q = -1;
-  if (key)
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (lines[i].replace(/\s/g, '').includes(key)) {
-        q = i;
-        break;
+  /**
+   * 改进的 STOP 截断：要求**连续 3 行**都匹配 STOP 模式才截断，
+   * 避免正文中某一行偶然命中 footer 关键词就把整个后半段丢掉。
+   */
+  const findStopIndex = (arr: string[]): number => {
+    let consecutive = 0;
+    for (let i = 0; i < arr.length; i++) {
+      if (STOP.test(arr[i])) {
+        consecutive++;
+        if (consecutive >= 3) return i - 2; // 截断到连续段的起始行
+      } else {
+        consecutive = 0;
       }
     }
+    return -1;
+  };
+
+  // —— ChatGPT 等「root 已是完整回答元素」的快捷路径：blockText 已是全文，直接裁头尾 ——
+  if (isAnswer) {
+    const body = trimHeadTail([...lines]).join('\n').trim();
+    if (body.length > 8) return { text: body, method: 'direct' };
+    // 极端情况：裁完太短，退化为通用剪刀法（用 blockText 的全文，不会截断）
+  }
+
+  // key 加长到 32 字符（#58）：短问题（slice(0,12)）极易在正文偶然命中，误把后面
+  // 整段回答当提问裁掉；优先匹配「用户：/你：/You:」等提问前缀行更可信。
+  const key = (args.prompt || '').replace(/\s/g, '').slice(0, 32);
+  let q = -1;
+  if (key) {
+    const USER_PREFIX_RE = /^(用户|你|我|问|Q|You|User)[:：]|^>\s/;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i].replace(/\s/g, '').includes(key)) {
+        q = i; // 命中即记录；优先保留更靠后且带提问前缀的
+        if (USER_PREFIX_RE.test(lines[i])) break;
+      }
+    }
+  }
   if (q >= 0 && q < lines.length - 1) {
     const rawBody = lines.slice(q + 1);
-    const stopIdx = rawBody.findIndex((l) => STOP.test(l));
+    const stopIdx = findStopIndex(rawBody);
     const body = trimHeadTail(stopIdx >= 0 ? rawBody.slice(0, stopIdx) : rawBody).join('\n').trim();
     if (body.length > 8) return { text: body, method: 'scissor' };
   }
   const rawHalf = lines.slice(Math.floor(lines.length / 2));
-  const stopIdx2 = rawHalf.findIndex((l) => STOP.test(l));
+  const stopIdx2 = findStopIndex(rawHalf);
   const half = trimHeadTail(stopIdx2 >= 0 ? rawHalf.slice(0, stopIdx2) : rawHalf).join('\n').trim();
   if (half.length > 8) return { text: half, method: 'tail-fallback' };
 
@@ -111,6 +215,74 @@ function grabInPage(args: { prompt: string; provider?: string }): { text: string
 }
 
 export { grabInPage };
+
+/**
+ * 纯读屏：找到指定 provider 的标签页，执行 grabInPage 读回回答文本。
+ * 不写会话/运行时，供工作台「手动获取」等旁路场景复用（只是兜底读，不沉淀）。
+ * 定位优先级（确保多标签场景下抓到「对」的那张）：
+ *   1) 显式传入的 tabId（节点精确记录的专属 tab）
+ *   2) nodeId 在登记表里对应的专属 tab（解决「同 provider 多 tab 串台」）
+ *   3) taskId 记录的 tabId
+ *   4) 按域名在全部标签页里查找（兜底）
+ */
+export async function grabFromProviderTab(
+  provider: ProviderName,
+  prompt: string,
+  opts?: { taskId?: string; tabId?: number; nodeId?: string; url?: string }
+): Promise<{ ok: boolean; text: string; method?: string; reason?: string; url?: string; tabId?: number }> {
+  let tabId: number | undefined = opts?.tabId;
+
+  // 定位优先级（确保多标签 / SW 重启后都抓到「这个节点」对应的那张页面）：
+  //   1) 显式传入的 tabId（节点精确记录的专属 tab，最权威）
+  //   2) nodeId 在「持久化登记表」里对应的专属 tab（根治 SW 重启后串台）
+  //   3) taskId 记录的 tabId
+  //   4) 按域名查找：优先匹配本节点已记录的会话 url，避免拿到上一个节点的页面
+  if (tabId === undefined && opts?.nodeId !== undefined) {
+    tabId = getRegisteredTabId(opts.nodeId, provider);
+  }
+  if (tabId === undefined && opts?.taskId !== undefined) {
+    tabId = getTask(opts.taskId)?.providers?.[provider]?.tabId;
+  }
+  const pat = DOMAIN_PATTERN[provider];
+  if (tabId === undefined && pat) {
+    const tabs = await chrome.tabs.query({ url: pat });
+    if (tabs.length > 0) {
+      // 有多个同域名 tab（不同节点的专属 tab 并存）时，优先精确匹配本节点记录的 url；
+      // 拿不到匹配项再退而求其次取第一个——但前三级已能在绝大多数情况下命中正确 tab。
+      const byUrl = opts?.url ? tabs.find((t) => t.url === opts.url) : undefined;
+      tabId = byUrl?.id ?? tabs[0]?.id;
+    }
+  }
+  if (tabId === undefined) {
+    return { ok: false, text: '', reason: '找不到该站点的标签页，请先在浏览器里打开它' };
+  }
+  try {
+    const res = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: grabInPage,
+      args: [{ prompt, provider }],
+    });
+    const got = (res?.[0]?.result || { text: '', method: 'none' }) as {
+      text: string;
+      method: string;
+      reason?: string;
+    };
+    const text = (got.text || '').trim();
+    let url: string | undefined;
+    try {
+      url = (await chrome.tabs.get(tabId)).url;
+    } catch {
+      /* 标签已关闭 */
+    }
+    if (text) {
+      console.log(`[MultiAI:grab] provider=${provider} method=${got.method} chars=${text.length} tabId=${tabId}`);
+      return { ok: true, text, method: got.method, url, tabId };
+    }
+    return { ok: false, text: '', reason: got.reason || '页面当前没有可读取的回答文本', url, tabId };
+  } catch (e) {
+    return { ok: false, text: '', reason: e instanceof Error ? e.message : String(e), tabId };
+  }
+}
 
 export interface GrabOutcome {
   provider: ProviderName;
@@ -142,17 +314,8 @@ export async function manualGrab(
   }
 
   try {
-    const res = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: grabInPage,
-      args: [{ prompt, provider }],
-    });
-    const got = (res?.[0]?.result || { text: '', method: 'none' }) as {
-      text: string;
-      method: string;
-      reason?: string;
-    };
-    const text = (got.text || '').trim();
+    const got = await grabFromProviderTab(provider, prompt, { taskId: turnId });
+    const text = got.text;
 
     let task = getTask(turnId);
     if (!task) task = createTask(turnId, prompt, [provider]);
@@ -231,9 +394,19 @@ export async function manualGrabAll(
   prompt: string,
   providers: ProviderName[]
 ): Promise<GrabOutcome[]> {
-  const outs: GrabOutcome[] = [];
-  for (const p of providers) {
-    outs.push(await manualGrab(conversationId, turnId, p, prompt));
-  }
-  return outs;
+  // 各 provider 在不同标签页里抓取，互不影响 → 并行（#43）。
+  // 原先 for-await 串行，N 家的耗时线性叠加（每家最坏数秒）。
+  // 用 allSettled 保证个别家抛错不会让整批失败。
+  const settled = await Promise.allSettled(
+    providers.map((p) => manualGrab(conversationId, turnId, p, prompt))
+  );
+  return settled.map((r, i) =>
+    r.status === 'fulfilled'
+      ? r.value
+      : {
+          provider: providers[i],
+          ok: false,
+          error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+        }
+  );
 }

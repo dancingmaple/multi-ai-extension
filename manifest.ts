@@ -5,7 +5,7 @@ const manifest: ManifestV3Export = {
   name: 'Multi AI Web Automation',
   version: '1.0.0',
   description: 'Send one prompt to 6 AI web apps and view answers side by side',
-  permissions: ['tabs', 'storage', 'scripting', 'sidePanel', 'webNavigation', 'alarms', 'downloads', 'debugger', 'declarativeNetRequestWithHostAccess'],
+  permissions: ['tabs', 'storage', 'scripting', 'sidePanel', 'webNavigation', 'alarms', 'downloads', 'debugger', 'declarativeNetRequestWithHostAccess', 'contextMenus'],
   host_permissions: [
     'https://chatgpt.com/*',
     'https://gemini.google.com/*',
@@ -18,6 +18,8 @@ const manifest: ManifestV3Export = {
     'https://*.moonshot.cn/*',
     'https://kimi.com/*',
   ],
+  // 用户在测试台自定义任意 AI 网页时按需申请（chrome.permissions.request）
+  optional_host_permissions: ['http://*/*', 'https://*/*'],
   externally_connectable: {
     matches: [
       'http://localhost/*',

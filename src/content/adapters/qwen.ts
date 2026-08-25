@@ -1,6 +1,10 @@
 import type { ProviderName } from '../../shared/types';
 import { BaseAdapter } from './base';
 import { SubmitFailedError } from '../../shared/utils';
+import { isElementVisible, findByPriority } from '../dom/query';
+import { createLogger } from '../../shared/debug';
+
+const qLog = createLogger('[Qwen:adapter]');
 
 /* ============================================================
    Qwen 适配器 · robust-v2（可见元素优先 + 写读校验 + Enter 兜底）
@@ -8,7 +12,7 @@ import { SubmitFailedError } from '../../shared/utils';
    当 Qwen 改用 contenteditable 或输入框不可见时写入失败。
    本版：可见元素优先 + execCommand 写入 + 未禁用发送按钮 + Enter 兜底。
    ============================================================ */
-console.log('[Qwen:adapter] build=robust-v2 2026-08-02');
+qLog('build=robust-v2 2026-08-02');
 
 const SUBMIT_SELECTORS = [
   'button.send-button',
@@ -28,13 +32,7 @@ const INPUT_SELECTORS = [
   '[contenteditable="true"]',
 ];
 
-function isVisible(el: Element | null): boolean {
-  if (!el || !(el instanceof HTMLElement)) return false;
-  const r = el.getBoundingClientRect();
-  if (r.width < 2 || r.height < 2) return false;
-  const s = getComputedStyle(el);
-  return s.visibility !== 'hidden' && s.display !== 'none' && +s.opacity > 0.01;
-}
+const isVisible = isElementVisible;
 function readBack(el: HTMLElement | null): string {
   if (!el) return '';
   if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) return (el.value || '').trim();
@@ -95,22 +93,21 @@ export class QwenAdapter extends BaseAdapter {
     el.blur();
     el.focus();
     await new Promise((r) => setTimeout(r, 250));
-    console.log('[Qwen:adapter] setPrompt', { ok, readBack: readBack(el).length });
+    qLog('setPrompt', { ok, readBack: readBack(el).length });
   }
 
   override async submit(): Promise<void> {
     await new Promise((r) => setTimeout(r, 150));
-    const btn = [...document.querySelectorAll(SUBMIT_SELECTORS.join(','))]
-      .filter((b) => isVisible(b) && !(b as HTMLButtonElement).disabled)
-      .pop() as HTMLElement | undefined;
-    if (btn) { btn.click(); console.log('[Qwen:adapter] submit via button'); return; }
+    // 按选择器优先级查找，避免 querySelectorAll 文档顺序覆盖精确选择器（#50）
+    const btn = findByPriority(SUBMIT_SELECTORS, isVisible);
+    if (btn) { btn.click(); qLog('submit via button'); return; }
     const el = findVisibleInput();
     if (el) {
       const init = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true } as KeyboardEventInit;
       el.dispatchEvent(new KeyboardEvent('keydown', init));
       el.dispatchEvent(new KeyboardEvent('keypress', init));
       el.dispatchEvent(new KeyboardEvent('keyup', init));
-      console.log('[Qwen:adapter] submit via Enter');
+      qLog('submit via Enter');
       return;
     }
     throw new SubmitFailedError(this.provider, 'no submit button and no input for Enter fallback');

@@ -1,4 +1,42 @@
-export type ProviderName = 'chatgpt' | 'gemini' | 'deepseek' | 'qwen' | 'zai' | 'doubao' | 'kimi';
+/** 内置的 7 家（有专属适配器） */
+export type BuiltinProviderName = 'chatgpt' | 'gemini' | 'deepseek' | 'qwen' | 'zai' | 'doubao' | 'kimi';
+
+/**
+ * 平台标识。
+ * 除内置 7 家外，用户可在测试台自定义任意 AI 网页并存成新节点，
+ * 其 id 形如 `custom:xxxx`，因此这里放宽为 string。
+ */
+export type ProviderName = string;
+
+/** 用户自定义的 AI 网页（测试台录入 → 全局可用的新 AI 节点） */
+export interface CustomProvider {
+  /** 唯一 id，形如 custom:1754800000000 */
+  id: ProviderName;
+  /** 显示名，如「我的 Claude」 */
+  label: string;
+  /** 打开地址 */
+  url: string;
+  /** 手动点选得到的三个关键元素选择器 */
+  inputSelector?: string;
+  submitSelector?: string;
+  responseSelector?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type CustomProviderMap = Record<string, CustomProvider>;
+
+/** 提示词模板（侧边栏 / 测试台 / 工作台三处共用，存 chrome.storage.local） */
+export interface PromptTemplate {
+  /** 唯一 id，形如 pt_xxx */
+  id: string;
+  /** 模板名（列表搜索也匹配它） */
+  name: string;
+  /** 模板正文（一键填充到输入框） */
+  content: string;
+  createdAt: number;
+  updatedAt: number;
+}
 
 export type ProviderStatus =
   | 'idle'
@@ -102,6 +140,11 @@ export type SwitchModeMessage = {
   target: 'fullscreen' | 'sidepanel';
 };
 
+/** 自定义 AI 网页有增删改（或刚授权主机权限）→ 让 background 重装动态脚本 / DNR 规则 */
+export type SyncCustomSitesMessage = {
+  type: 'SYNC_CUSTOM_SITES';
+};
+
 // ── 多轮 / 会话（§5） ───────────────────────────────
 export type NewConversationMessage = {
   type: 'NEW_CONVERSATION';
@@ -190,13 +233,62 @@ export type KeepaliveAck = {
   type: 'KA';
 };
 
+// ── 工作台 (Workbench) DAG 工作流执行 ───────────────
+export type WorkbenchNodeType = 'start' | 'summarize' | 'process' | 'end';
+
+export type WorkbenchExecuteMessage = {
+  type: 'WORKBENCH_EXECUTE';
+  nodeId: string;
+  nodeType: WorkbenchNodeType;
+  prompt: string;
+  providers: ProviderName[];
+};
+
+/** Background 对 WORKBENCH_EXECUTE 的同步响应：各目标 AI 的最终回答 */
+export type WorkbenchExecResult = {
+  ok: boolean;
+  outputs: Partial<Record<ProviderName, string>>;
+  errors: Partial<Record<ProviderName, string>>;
+  /** 本次执行在 background 内部创建的 taskId，便于后续「手动获取」定位各家标签页 */
+  taskId?: string;
+  /** 每家 AI 回答完成后所在会话的最终地址（便于回看/溯源），键为 provider */
+  urls?: Partial<Record<ProviderName, string>>;
+  /** 每家 AI 实际运行的标签页 id（按 节点+平台 登记的唯一专属 tab），键为 provider */
+  tabIds?: Partial<Record<ProviderName, number>>;
+};
+
+/** 工作台节点的手动兜底获取：重新从各家标签页读屏，挽回自动抓取失败的回答 */
+export type WorkbenchGrabMessage = {
+  type: 'WORKBENCH_GRAB';
+  nodeId: string;
+  prompt: string;
+  providers: ProviderName[];
+  /** 可选：本次节点执行对应的 background taskId，用于精确定位标签页（缺省按域名查找） */
+  taskId?: string;
+  /** 可选：本次节点各家 AI 的标签页 id（按 节点+平台 登记的唯一专属 tab，避免多标签串台） */
+  tabIds?: Partial<Record<ProviderName, number>>;
+  /** 可选：本次节点各家 AI 已记录的会话 url，域名兜底查找时优先精确匹配，避免串台 */
+  urls?: Partial<Record<ProviderName, string>>;
+};
+
+export type WorkbenchGrabResult = {
+  ok: boolean;
+  outputs: Partial<Record<ProviderName, string>>;
+  errors: Partial<Record<ProviderName, string>>;
+  urls?: Partial<Record<ProviderName, string>>;
+  tabIds?: Partial<Record<ProviderName, number>>;
+};
+
 // 受信任点击：Kimi 等站点只接受 isTrusted 事件，content script 无法派发，
-// 故由 sidepanel 计算出绝对视口坐标后，让 background 用 chrome.debugger 点击。
-// x/y 为相对于 sidepanel 视口的绝对坐标。
+// 故由父页面（测试台 / 侧边栏网页视图）计算出绝对视口坐标后，让 background 用
+// chrome.debugger 点击。x/y 为相对于「宿主 tab 视口」的绝对坐标。
+// tabId 由父页面显式透传（iframe 场景下 _sender.tab 拿不到正确宿主 tab）；
+// 未提供时回退到 _sender.tab（真实标签页场景由 content script 直接发）。
 export type TrustedClickMessage = {
   type: 'TRUSTED_CLICK';
   x: number;
   y: number;
+  tabId?: number;
 };
 
 export type UIMessage =
@@ -204,6 +296,7 @@ export type UIMessage =
   | GetTaskStateMessage
   | RetryProviderMessage
   | SwitchModeMessage
+  | SyncCustomSitesMessage
   | NewConversationMessage
   | AppendTurnMessage
   | GetConversationMessage
@@ -216,6 +309,8 @@ export type UIMessage =
   | ExportMarkdownMessage
   | ResumeMessage
   | KeepaliveAck
+  | WorkbenchExecuteMessage
+  | WorkbenchGrabMessage
   | TrustedClickMessage;
 
 // ── Background → Content ───────────────────────────────
@@ -232,6 +327,17 @@ export type PingMessage = {
 };
 
 export type BackgroundToContentMessage = ExecutePromptMessage | PingMessage;
+
+// ── 手动选取元素（适配 UI 变化） ─────────────────────
+export type ElementRole = 'input' | 'submit' | 'response';
+
+export type ProviderCustomSelectors = {
+  input?: string;
+  submit?: string;
+  response?: string;
+};
+
+export type CustomSelectorMap = Partial<Record<ProviderName, ProviderCustomSelectors>>;
 
 // ── Content → Background ───────────────────────────────
 

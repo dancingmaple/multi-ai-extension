@@ -1,7 +1,7 @@
 import React from 'react';
 import { useStore } from '../store';
 import type { ProviderName, ProviderStatus } from '../../shared/types';
-import { ALL_PROVIDERS, PROVIDER_LABELS } from '../../shared/constants';
+import { useEffectiveProviders } from '../../shared/useEffectiveProviders';
 import styles from './StatusBar.module.css';
 
 const STATUS_LABELS: Record<ProviderStatus, string> = {
@@ -19,9 +19,10 @@ interface StatusButtonProps {
   status: ProviderStatus;
   error?: string;
   tabId?: number;
+  label?: string;
 }
 
-const StatusButton: React.FC<StatusButtonProps> = ({ provider, status, error, tabId }) => {
+const StatusButton: React.FC<StatusButtonProps> = ({ provider, status, error, tabId, label }) => {
   const retryProvider = useStore((s) => s.retryProvider);
 
   const handleClick = () => {
@@ -42,7 +43,7 @@ const StatusButton: React.FC<StatusButtonProps> = ({ provider, status, error, ta
         disabled={!clickable}
       >
         <StatusIcon status={status} />
-        <span className={styles.label}>{PROVIDER_LABELS[provider]}</span>
+        <span className={styles.label}>{label ?? provider}</span>
         <span className={styles.status}>{error || STATUS_LABELS[status]}</span>
       </button>
       {canRetry && (
@@ -78,10 +79,12 @@ const StatusIcon: React.FC<{ status: ProviderStatus }> = ({ status }) => {
 
 const StatusBar: React.FC = () => {
   const task = useStore((s) => s.task);
+  const effective = useEffectiveProviders();
 
   return (
     <div className={styles.container}>
-      {ALL_PROVIDERS.map((provider) => {
+      {effective.map((e) => {
+        const provider = e.id as ProviderName;
         const ps = task?.providers[provider];
         return (
           <StatusButton
@@ -90,6 +93,7 @@ const StatusBar: React.FC = () => {
             status={ps?.status || 'idle'}
             error={ps?.error}
             tabId={ps?.tabId}
+            label={e.label}
           />
         );
       })}

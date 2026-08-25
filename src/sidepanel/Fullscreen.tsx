@@ -1,18 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from './store';
-import { ALL_PROVIDERS, PROVIDER_LABELS } from '../shared/constants';
 import type { Turn, Conversation } from '../shared/types';
+import { useEffectiveProviders } from '../shared/useEffectiveProviders';
+import { PromptTemplateMenu } from '../shared/PromptTemplateMenu';
 import WebView from './WebView';
 import styles from './Fullscreen.module.css';
+import { THEME_ICON, THEME_ORDER } from './theme';
 
 const fmtTime = (ts: number): string => {
   const d = new Date(ts);
   const p = (n: number) => String(n).padStart(2, '0');
   return `${p(d.getHours())}:${p(d.getMinutes())}`;
 };
-
-const THEME_ICON: Record<string, string> = { light: '☀', dark: '🌙', auto: '🌗' };
-const THEME_ORDER = ['light', 'dark', 'auto'] as const;
 
 const Fullscreen: React.FC = () => {
   const conversation = useStore((s) => s.conversation);
@@ -42,6 +41,8 @@ const Fullscreen: React.FC = () => {
 
   const [drawer, setDrawer] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
+
+  const effective = useEffectiveProviders();
 
   useEffect(() => {
     setTitleDraft(conversation?.title ?? '');
@@ -78,8 +79,7 @@ const Fullscreen: React.FC = () => {
       return s === 'done' || s === 'error' || s === 'login_required';
     });
     if (settled) {
-      const cols = targets.filter((p) => ALL_PROVIDERS.includes(p));
-      openReader(cols, 0, liveTask.taskId);
+      openReader(targets, 0, liveTask.taskId);
       pendingAutoOpen.current = null;
     }
   }, [liveTask, embedSend, openReader]);
@@ -171,16 +171,23 @@ const Fullscreen: React.FC = () => {
         />
         <div className={styles.composeBar}>
           <div className={styles.chips}>
-            {ALL_PROVIDERS.map((p) => (
-              <label key={p} className={`${styles.chip} ${selectedProviders.includes(p) ? styles.chipOn : ''}`}>
-                <input type="checkbox" checked={selectedProviders.includes(p)} onChange={() => toggleProvider(p)} />
-                {PROVIDER_LABELS[p]}
-              </label>
-            ))}
+            {effective.map((e) => {
+              const p = e.id;
+              return (
+                <label key={p} className={`${styles.chip} ${selectedProviders.includes(p) ? styles.chipOn : ''}`}>
+                  <input type="checkbox" checked={selectedProviders.includes(p)} onChange={() => toggleProvider(p)} />
+                  {e.label}
+                </label>
+              );
+            })}
           </div>
-          <button className={styles.sendBtn} onClick={handleSend} disabled={isLoading || !prompt.trim() || selectedProviders.length === 0}>
-            {isLoading ? '获取中…' : '一键获取并查看 ▶'}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            {/* 提示词模板：搜索/添加/一键填充（与侧边栏、测试台、工作台共用） */}
+            <PromptTemplateMenu currentPrompt={prompt} onPick={(content) => setPrompt(content)} direction="up" />
+            <button className={styles.sendBtn} onClick={handleSend} disabled={isLoading || !prompt.trim() || selectedProviders.length === 0}>
+              {isLoading ? '获取中…' : '一键获取并查看 ▶'}
+            </button>
+          </div>
         </div>
       </footer>
 

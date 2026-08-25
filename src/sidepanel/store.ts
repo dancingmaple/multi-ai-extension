@@ -17,6 +17,33 @@ export type PanelMode = 'fullscreen' | 'sidepanel';
 const HISTORY_KEY = 'conversation_history';
 const MAX_HISTORY = 200;
 
+/**
+ * 加载态兜底计时器（#30）。
+ * 原先每次发起请求都 `setTimeout(..., 300000)` 却从不清除：
+ * 任务提前完成后旧计时器仍在跑，5 分钟内发起的新任务会被它误清 isLoading，
+ * 表现为「还在跑但按钮已恢复可点」。这里改为全局单例 + 任务号校验。
+ */
+const LOADING_SAFETY_MS = 300000;
+let loadingSafetyTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearLoadingSafety(): void {
+  if (loadingSafetyTimer !== null) {
+    clearTimeout(loadingSafetyTimer);
+    loadingSafetyTimer = null;
+  }
+}
+
+function armLoadingSafety(taskId: string, isStale: () => boolean, onFire: () => void): void {
+  clearLoadingSafety();
+  loadingSafetyTimer = setTimeout(() => {
+    loadingSafetyTimer = null;
+    // 任务已被后续请求替换 → 不再干预新任务的加载态
+    if (isStale()) return;
+    console.warn('[sidepanel] 任务超过 5 分钟未完成，强制解除加载态', taskId);
+    onFire();
+  }, LOADING_SAFETY_MS);
+}
+
 function detectMode(): PanelMode {
   if (typeof window !== 'undefined' && window.location.search.includes('mode=fullscreen')) {
     return 'fullscreen';
@@ -80,6 +107,8 @@ interface PanelState {
   toggleVisibleProvider: (provider: ProviderName) => void;
   setActiveTab: (provider: ProviderName) => void;
   setTask: (task: AskTaskState) => void;
+  /** 任务收尾：解除加载态并撤掉兜底计时器（#30） */
+  finishLoading: () => void;
   sendPrompt: () => Promise<void>;
   retryProvider: (provider: ProviderName) => Promise<void>;
   restoreLastTask: () => Promise<void>;
@@ -162,6 +191,11 @@ export const useStore = create<PanelState>((set, get) => ({
 
   setTask: (task) => set({ task }),
 
+  finishLoading: () => {
+    clearLoadingSafety();
+    set({ isLoading: false });
+  },
+
   sendPrompt: async () => {
     const { prompt, selectedProviders } = get();
     if (!prompt.trim() || selectedProviders.length === 0) return;
@@ -174,8 +208,8 @@ export const useStore = create<PanelState>((set, get) => ({
     const taskId = generateTaskId();
     set({ currentTaskId: taskId, isLoading: true });
 
-    // Safety timeout: force-clear loading after 5 minutes
-    const safetyTimer = setTimeout(() => set({ isLoading: false }), 300000);
+    // 兜底：5 分钟后仍未收到完成通知则解除加载态（仅当任务未被替换）
+    armLoadingSafety(taskId, () => get().currentTaskId !== taskId, () => set({ isLoading: false }));
 
     try {
       await sendToBackground({
@@ -186,7 +220,7 @@ export const useStore = create<PanelState>((set, get) => ({
       });
     } catch {
       set({ isLoading: false });
-      clearTimeout(safetyTimer);
+      clearLoadingSafety();
     }
   },
 
@@ -389,7 +423,7 @@ export const useStore = create<PanelState>((set, get) => ({
       if (get().toast?.startsWith('正在向')) set({ toast: undefined });
     }, 2600);
 
-    const safetyTimer = setTimeout(() => set({ isLoading: false }), 300000);
+    armLoadingSafety(turnId, () => get().currentTaskId !== turnId, () => set({ isLoading: false }));
     try {
       await sendToBackground({
         type: 'APPEND_TURN',
@@ -400,7 +434,7 @@ export const useStore = create<PanelState>((set, get) => ({
       });
     } catch {
       set({ isLoading: false });
-      clearTimeout(safetyTimer);
+      clearLoadingSafety();
     }
   },
 
@@ -522,7 +556,7 @@ export const useStore = create<PanelState>((set, get) => ({
       embedSend: { turnId, prompt: text, targets: providers, nonce },
     });
 
-    const safetyTimer = setTimeout(() => set({ isLoading: false }), 300000);
+    armLoadingSafety(turnId, () => get().currentTaskId !== turnId, () => set({ isLoading: false }));
     try {
       await sendToBackground({
         type: 'APPEND_TURN',
@@ -534,7 +568,7 @@ export const useStore = create<PanelState>((set, get) => ({
       });
     } catch {
       set({ isLoading: false });
-      clearTimeout(safetyTimer);
+      clearLoadingSafety();
     }
   },
 }));

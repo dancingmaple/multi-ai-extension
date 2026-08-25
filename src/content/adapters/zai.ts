@@ -2,6 +2,10 @@ import type { ProviderName } from '../../shared/types';
 import { BaseAdapter } from './base';
 import { SubmitFailedError } from '../../shared/utils';
 import { extractAnswer } from '../../shared/grab';
+import { observeDocumentThrottled } from '../dom/observer';
+import { isElementVisible, findByPriority } from '../dom/query';
+import { PLACEHOLDER_RE } from '../../shared/constants';
+import { createLogger } from '../../shared/debug';
 
 /* ============================================================
    Z.ai 适配器 · robust-v3
@@ -24,22 +28,15 @@ const CONFIG = {
   ],
   LOGIN_SELECTORS: ['a[href*="/login"]', 'a[href*="/signin"]'],
 
-  PLACEHOLDER_RE: /^[.…·••\s…\u2026\u00b7]*$/,
 
   HARD_STABLE: 2200, SOFT_STABLE: 6000, ABS_CAP: 9000,
   THINKING_PLACEHOLDER: '⏳ 思考 / 联网检索中…',
-  STREAM_THROTTLE_MS: 250, POLL_MS: 400, DEBUG: true,
+  STREAM_THROTTLE_MS: 250, POLL_MS: 400,
 };
 
-const log = (...a: unknown[]) => { if (CONFIG.DEBUG) console.log('[Zai:adapter]', ...a); };
+const log = createLogger('[Zai:adapter]');
 
-function isVisible(el: Element | null): boolean {
-  if (!el || !(el instanceof HTMLElement)) return false;
-  const r = el.getBoundingClientRect();
-  if (r.width < 2 || r.height < 2) return false;
-  const s = getComputedStyle(el);
-  return s.visibility !== 'hidden' && s.display !== 'none' && +s.opacity > 0.01;
-}
+const isVisible = isElementVisible;
 
 /* 优先从对话主容器取文本，避免右侧/左侧工具栏混入 */
 function chatRoot(): HTMLElement {
@@ -90,7 +87,8 @@ export class ZaiAdapter extends BaseAdapter {
 
   override async submit(): Promise<void> {
     await new Promise((r) => setTimeout(r, 150));
-    const btn = [...document.querySelectorAll(this.submitSelectors.join(','))].filter((b) => isVisible(b) && !(b as HTMLButtonElement).disabled).pop() as HTMLElement | undefined;
+    // 按选择器优先级查找，避免 querySelectorAll 文档顺序覆盖精确选择器（#50）
+    const btn = findByPriority(this.submitSelectors, isVisible);
     if (btn) { btn.click(); log('submit via button'); return; }
     const el = [...document.querySelectorAll(this.inputSelectors.join(','))].find(isVisible) as HTMLElement | undefined;
     if (el) {
@@ -120,7 +118,7 @@ export class ZaiAdapter extends BaseAdapter {
       if (!started && text.length > gateLen + 12) { started = true; log('GATE OPEN len', text.length, '>', gateLen); }
       const extracted = started ? extractAnswer(text, prompt) : { text: '', method: 'none' };
       const real = extracted.text;
-      const isPlaceholder = !real || CONFIG.PLACEHOLDER_RE.test(real);
+      const isPlaceholder = !real || PLACEHOLDER_RE.test(real);
       const body = isPlaceholder ? '' : real;
       const show = body || (started ? CONFIG.THINKING_PLACEHOLDER : '');
       if (show && show !== lastSent && now - lastEmit >= CONFIG.STREAM_THROTTLE_MS) { lastSent = show; lastEmit = now; onUpdate(show); }
@@ -140,15 +138,15 @@ export class ZaiAdapter extends BaseAdapter {
       if (now - t0 >= maxWait) {
         stopped = true; cleanup();
         const final = extractAnswer(pageText(), prompt).text;
-        if (final && !CONFIG.PLACEHOLDER_RE.test(final)) { log('HARD_TIMEOUT 有正文'); onDone(final); }
+        if (final && !PLACEHOLDER_RE.test(final)) { log('HARD_TIMEOUT 有正文'); onDone(final); }
         else { log('HARD_TIMEOUT 无正文'); onError(new Error('StreamTimeoutError')); }
       }
     };
 
-    const mo = new MutationObserver(() => { if (!stopped) tick(); });
-    mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+    // 合并节流：流式期间站点每秒数百条 mutation，逐条跑 tick 会打满 CPU（#7）
+    const stopObserve = observeDocumentThrottled(() => { if (!stopped) tick(); });
     const poll = window.setInterval(tick, CONFIG.POLL_MS);
-    function cleanup() { mo.disconnect(); clearInterval(poll); }
+    function cleanup() { stopObserve(); clearInterval(poll); }
     tick(); return cleanup;
   }
 }

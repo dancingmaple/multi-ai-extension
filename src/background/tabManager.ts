@@ -1,27 +1,183 @@
 import type { ProviderName } from '../shared/types';
-import { getProviderUrl, getProviderMatchPattern } from '../shared/providers';
+import { getProviderUrlAsync, getProviderMatchPattern } from '../shared/providers';
 import { TAB_SETTLE_MS, PING_RETRY_MAX, PING_RETRY_DELAY_MS } from '../shared/constants';
 import { sleep } from '../shared/utils';
 
-export async function getOrCreateProviderTab(provider: ProviderName): Promise<number> {
-  console.log('[MultiAI:tabManager] getOrCreateProviderTab for', provider);
-  const existing = await findExistingTab(provider);
-  if (existing !== null) {
-    // Check if content script is actually alive (might be stale after extension reload)
-    try {
-      await ensureContentScriptReady(existing);
-      console.log('[MultiAI:tabManager] Found existing tab', existing, 'for', provider);
-      return existing;
-    } catch {
-      console.log('[MultiAI:tabManager] Existing tab', existing, 'has stale content script, creating new tab');
-      // Close the stale tab
-      chrome.tabs.remove(existing).catch(() => {});
+// ─────────────────────────────────────────────────────────────
+// 节点-平台专属标签页登记表：(nodeId + provider) -> tabId
+// 工作台每个节点对每个 AI 只持有「一张」专属标签页：
+//  - 既保证「每个节点独立新会话」（不同节点的同名 AI 不会串台/续聊），
+//  - 又避免每次执行都新开标签、导致浏览器里堆满重复 tab，
+//  - 同时让「手动获取 / 预览 / 聚焦」能精确定位到这一张 tab，不再因
+//    「同 provider 多 tab」而抓错页面（之前的 forceNew 方案的痛点）。
+//
+// 关键：登记表持久化到 chrome.storage，跨 MV3 service worker 重启不丢失。
+// 否则 SW 重启后登记表清空，「手动获取 / 聚焦」回退到「按域名查第一个匹配
+// tab」，极易抓到上一个节点的页面（内容串台 / 聚焦错 tab）。
+// ─────────────────────────────────────────────────────────────
+const WB_TAB_REGISTRY_KEY = 'wb_tab_registry_v1';
+const nodeProviderTabs = new Map<string, number>();
+// tabId → 登记表 key 的反向索引（#63）。
+// 标签页关闭事件很频繁（用户开关任意 tab 都会触发），原先每次都要遍历
+// 整张登记表；这里用反向索引把清理降到 O(1)。
+const tabToKeys = new Map<number, Set<string>>();
+
+/** 唯一的写入口：同时维护正向表与反向索引 */
+function setRegistryEntry(key: string, tabId: number): void {
+  deleteRegistryEntry(key);
+  nodeProviderTabs.set(key, tabId);
+  let keys = tabToKeys.get(tabId);
+  if (!keys) {
+    keys = new Set();
+    tabToKeys.set(tabId, keys);
+  }
+  keys.add(key);
+}
+
+/** 唯一的删除入口：同时维护正向表与反向索引 */
+function deleteRegistryEntry(key: string): void {
+  const old = nodeProviderTabs.get(key);
+  if (old === undefined) return;
+  nodeProviderTabs.delete(key);
+  const keys = tabToKeys.get(old);
+  if (keys) {
+    keys.delete(key);
+    if (keys.size === 0) tabToKeys.delete(old);
+  }
+}
+// 同 (nodeId,provider) 并发请求去重：避免「快速二次触发」各 create 一张 tab，
+// 后写覆盖登记表 → 先创建的 tab 永不复用也不清理（孤儿 tab）。(#17)
+const inflightTabs = new Map<string, Promise<number>>();
+
+function registryKey(nodeId: string, provider: ProviderName): string {
+  return `${nodeId}:${provider}`;
+}
+
+/** 把内存登记表落盘（耐久化），供 SW 重启后恢复 */
+function persistRegistry(): void {
+  try {
+    const obj: Record<string, number> = {};
+    for (const [k, v] of nodeProviderTabs.entries()) obj[k] = v;
+    void chrome.storage.local.set({ [WB_TAB_REGISTRY_KEY]: obj });
+  } catch {
+    /* 存储不可用时静默，内存表仍可用 */
+  }
+}
+
+/** SW 启动时从 chrome.storage 恢复登记表，避免重启后丢失导致抓错 tab */
+export async function loadTabRegistry(): Promise<void> {
+  try {
+    const res = await chrome.storage.local.get(WB_TAB_REGISTRY_KEY);
+    const obj = res[WB_TAB_REGISTRY_KEY] as Record<string, number> | undefined;
+    if (obj && typeof obj === 'object') {
+      for (const [k, v] of Object.entries(obj)) {
+        if (typeof v === 'number') setRegistryEntry(k, v);
+      }
+      console.log('[MultiAI:tabManager] 已从存储恢复标签页登记表', nodeProviderTabs.size, '条');
+    }
+  } catch (e) {
+    console.warn('[MultiAI:tabManager] 恢复登记表失败', e);
+  }
+}
+
+/** 取出某节点某平台的专属 tabId（不做存活校验，调用方负责） */
+export function getRegisteredTabId(
+  nodeId: string | undefined,
+  provider: ProviderName
+): number | undefined {
+  if (!nodeId) return undefined;
+  return nodeProviderTabs.get(registryKey(nodeId, provider));
+}
+
+/** 标签页被用户关闭时，从登记表移除，避免复用死 tab（走反向索引，O(1)） */
+chrome.tabs.onRemoved.addListener((tabId) => {
+  const keys = tabToKeys.get(tabId);
+  if (!keys || keys.size === 0) return;
+  for (const key of [...keys]) deleteRegistryEntry(key);
+  persistRegistry();
+});
+
+export async function getOrCreateProviderTab(
+  provider: ProviderName,
+  opts?: { forceNew?: boolean; nodeId?: string }
+): Promise<number> {
+  const nodeId = opts?.nodeId;
+  console.log('[MultiAI:tabManager] getOrCreateProviderTab', provider, {
+    nodeId: nodeId ?? null,
+    forceNew: !!opts?.forceNew,
+  });
+
+  // ── 工作台路径：每个 (节点, provider) 绑定一张专属标签页，复用而非新开 ──
+  if (nodeId) {
+    const key = registryKey(nodeId, provider);
+    if (!inflightTabs.has(key)) {
+      inflightTabs.set(
+        key,
+        (async () => {
+          const existing = nodeProviderTabs.get(key);
+          if (existing !== undefined) {
+            try {
+              const tab = await chrome.tabs.get(existing);
+              if (tab) {
+                // 复用前把该标签页重置为新会话（避免沿用上一个任务 / 上一轮对话的上下文）
+                await resetTabToNewChat(existing, provider);
+                console.log('[MultiAI:tabManager] 复用节点专属 tab', existing, 'for', key);
+                return existing;
+              }
+            } catch {
+              // 标签页已失效（被关/崩溃）：从登记表移除并重建
+              deleteRegistryEntry(key);
+              persistRegistry();
+            }
+          }
+          // 还没有专属 tab：新开并登记
+          const tabId = await createProviderTab(provider);
+          setRegistryEntry(key, tabId);
+          persistRegistry();
+          console.log('[MultiAI:tabManager] 新建并登记节点专属 tab', tabId, 'for', key);
+          return tabId;
+        })().finally(() => {
+          inflightTabs.delete(key);
+        })
+      );
+    }
+    return inflightTabs.get(key)!;
+  }
+
+  // ── 侧边栏 / 全屏路径（无 nodeId）：沿用原有「按域名复用一个 tab」逻辑 ──
+  if (!opts?.forceNew) {
+    const existing = await findExistingTab(provider);
+    if (existing !== null) {
+      try {
+        await ensureContentScriptReady(existing);
+        console.log('[MultiAI:tabManager] Found existing tab', existing, 'for', provider);
+        return existing;
+      } catch {
+        console.log('[MultiAI:tabManager] Existing tab', existing, 'has stale content script, creating new tab');
+        chrome.tabs.remove(existing).catch(() => {});
+      }
     }
   }
 
-  const url = getProviderUrl(provider);
-  // 新建标签页时，部分 AI 站点 SPA 启动较慢，content script 可能第一次 ping 不到。
-  // 这里允许重试一次，避免「第一次发送无法发起」。
+  return createProviderTab(provider);
+}
+
+/** 把已存在的标签页重置为对应 AI 的新会话（导航到新对话地址 + 等待就绪） */
+async function resetTabToNewChat(tabId: number, provider: ProviderName): Promise<void> {
+  try {
+    await chrome.tabs.update(tabId, { url: await getProviderUrlAsync(provider) });
+    await waitForTabReady(tabId);
+    await sleep(TAB_SETTLE_MS);
+    await ensureContentScriptReady(tabId);
+    console.log('[MultiAI:tabManager] 已重置 tab', tabId, '为', provider, '新会话');
+  } catch (e) {
+    // 导航失败（站点结构变化等）时退化为沿用当前页面，不让本次执行整体失败
+    console.warn('[MultiAI:tabManager] 重置会话失败，沿用当前页面', provider, e);
+  }
+}
+
+async function createProviderTab(provider: ProviderName): Promise<number> {
+  const url = await getProviderUrlAsync(provider);
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       console.log('[MultiAI:tabManager] Creating new tab for', url, 'attempt', attempt + 1);
@@ -52,25 +208,34 @@ async function findExistingTab(provider: ProviderName): Promise<number | null> {
   return null;
 }
 
-async function waitForTabReady(tabId: number): Promise<void> {
+function waitForTabReady(tabId: number): Promise<void> {
+  // 事件驱动：监听 tabs.onUpdated(status==='complete')，不再每 500ms 轮询
+  // chrome.tabs.get（#40）。manifest 已声明 tabs 权限，webNavigation 亦可但 onUpdated 更直接。
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('Tab load timeout')), 30000);
-    const check = () => {
-      chrome.tabs.get(tabId, (tab) => {
-        if (chrome.runtime.lastError) {
-          clearTimeout(timeout);
-          reject(chrome.runtime.lastError);
-          return;
-        }
-        if (tab.status === 'complete') {
-          clearTimeout(timeout);
-          resolve();
-        } else {
-          setTimeout(check, 500);
-        }
-      });
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (ok: boolean, err?: unknown) => {
+      if (settled) return;
+      settled = true;
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      if (timer !== undefined) clearTimeout(timer);
+      if (ok) resolve();
+      else reject(err instanceof Error ? err : new Error(String(err)));
     };
-    check();
+    timer = setTimeout(() => finish(false, new Error('Tab load timeout')), 30000);
+    const onUpdated = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
+      if (updatedTabId !== tabId) return;
+      if (info.status === 'complete') finish(true);
+    };
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    // 立即查一次：标签页可能早已 complete（先前轮询改事件驱动前的窗口期）
+    chrome.tabs.get(tabId, (tab) => {
+      if (chrome.runtime.lastError) {
+        finish(false, chrome.runtime.lastError);
+        return;
+      }
+      if (tab.status === 'complete') finish(true);
+    });
   });
 }
 

@@ -1,6 +1,9 @@
 import type { ProviderName } from '../../shared/types';
 import { BaseAdapter } from './base';
 import { SubmitFailedError } from '../../shared/utils';
+import { createLogger } from '../../shared/debug';
+
+const kLog = createLogger('[Kimi:adapter]');
 
 /* ============================================================
    Kimi 适配器 · robust-v2
@@ -13,7 +16,7 @@ import { SubmitFailedError } from '../../shared/utils';
    策略：可见输入框优先 + 占位符兜底 + 先点击激活 + execCommand 写入 +
          写后回读校验 + 发送按钮优先点击、Enter 兜底。
    ============================================================ */
-console.log('[Kimi:adapter] build=robust-v2 2026-08-03');
+kLog('build=robust-v2 2026-08-03');
 
 const SUBMIT_SELECTORS = [
   '.send-icon.iconify',
@@ -173,7 +176,7 @@ export class KimiAdapter extends BaseAdapter {
 
     el.focus();
     await new Promise((r) => setTimeout(r, 200));
-    console.log('[Kimi:adapter] setPrompt', { ok, readBack: readBack(el).length });
+    kLog('setPrompt', { ok, readBack: readBack(el).length });
   }
 
   /**
@@ -195,15 +198,32 @@ export class KimiAdapter extends BaseAdapter {
     }
 
     const r = send.getBoundingClientRect();
+    // 按钮在 Kimi 页面（iframe）视口内的矩形。
     const rect = { left: r.left, top: r.top, width: r.width, height: r.height };
-    // 跨域 iframe → 父窗口（sidepanel）的 postMessage 是允许的
-    try {
-      window.parent.postMessage({ __kimiSend: true, rect }, '*');
-      console.log('[Kimi:adapter] submit → 已请求父窗口受信任点击', rect);
-    } catch (e) {
-      throw new SubmitFailedError(this.provider, 'postMessage 给父窗口失败：' + (e instanceof Error ? e.message : String(e)));
+
+    // 真实标签页里：window.parent === window，Kimi 整页就是该 tab，
+    // 直接让 background 用 chrome.debugger 在该 tab 同坐标处派发受信任点击即可。
+    if (!window.parent || window.parent === window) {
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'TRUSTED_CLICK',
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        });
+        kLog('submit → 已请求 background 受信任点击（标签页模式）', rect);
+      } catch (e) {
+        throw new SubmitFailedError(this.provider, '请求后台受信任点击失败：' + (e instanceof Error ? e.message : String(e)));
+      }
+      return;
     }
-    // 父窗口会算绝对坐标并触发 chrome.debugger 点击；这里无需再等
+
+    // 嵌入视图（iframe，如测试台 / 侧边栏网页视图）：content script 无法跨域读取自身
+    // iframe 在宿主页里的偏移，而 chrome.debugger 只能点「宿主 tab 视口」坐标。因此把
+    // 按钮在 iframe 内的矩形交给父页面，由父页面加上 iframe 偏移后再转发给 background 点击。
+    // （沿用 WebView 已实现的 __kimiSend 桥接协议。）
+    window.parent.postMessage({ __kimiSend: true, rect, provider: this.provider }, '*');
+    kLog('submit → 已请求父页面发起受信任点击（iframe 模式）', rect);
+    // background 用 chrome.debugger 点击后 Kimi 开始生成；这里无需再等
   }
 }
 

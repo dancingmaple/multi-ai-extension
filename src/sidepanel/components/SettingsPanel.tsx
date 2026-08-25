@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useStore } from '../store';
 import type { ProviderName } from '../../shared/types';
-import { ALL_PROVIDERS, PROVIDER_LABELS } from '../../shared/constants';
+import { useEffectiveProviders } from '../../shared/useEffectiveProviders';
 import styles from './SettingsPanel.module.css';
 
 const SettingsPanel: React.FC = () => {
@@ -9,23 +9,30 @@ const SettingsPanel: React.FC = () => {
   const saveSettings = useStore((s) => s.saveSettings);
   const setShowSettings = useStore((s) => s.setShowSettings);
 
+  const effective = useEffectiveProviders();
+
+  // 本地草稿：输入时只更新草稿，失焦/关闭时才落盘，避免每次按键都写 storage 并触发订阅者重渲染（#54）
+  const [draft, setDraft] = useState(settings);
+  useEffect(() => setDraft(settings), [settings]);
+  const commit = () => saveSettings(draft);
+
   const handleElementTimeout = (value: number) => {
-    saveSettings({ ...settings, elementTimeoutMs: value || 5000 });
+    setDraft((d) => ({ ...d, elementTimeoutMs: value || 5000 }));
   };
 
   const handleResponseTimeout = (provider: ProviderName, value: number) => {
-    saveSettings({
-      ...settings,
-      responseTimeoutMs: { ...settings.responseTimeoutMs, [provider]: value || 30000 },
-    });
+    setDraft((d) => ({
+      ...d,
+      responseTimeoutMs: { ...d.responseTimeoutMs, [provider]: value || 30000 },
+    }));
   };
 
   return (
-    <div className={styles.overlay} onClick={() => setShowSettings(false)}>
+    <div className={styles.overlay} onClick={() => { commit(); setShowSettings(false); }}>
       <div className={styles.panel} onClick={(e) => e.stopPropagation()}>
         <div className={styles.header}>
           <span className={styles.title}>Settings</span>
-          <button className={styles.closeBtn} onClick={() => setShowSettings(false)}>×</button>
+          <button className={styles.closeBtn} onClick={() => { commit(); setShowSettings(false); }}>×</button>
         </div>
 
         <div className={styles.body}>
@@ -36,8 +43,9 @@ const SettingsPanel: React.FC = () => {
               <input
                 type="number"
                 className={styles.input}
-                value={settings.elementTimeoutMs}
+                value={draft.elementTimeoutMs}
                 onChange={(e) => handleElementTimeout(Number(e.target.value))}
+                onBlur={commit}
                 min={5000} max={60000} step={1000}
               />
             </label>
@@ -49,18 +57,22 @@ const SettingsPanel: React.FC = () => {
             <h3 className={styles.sectionTitle}>Response Timeout per Provider</h3>
             <p className={styles.sectionHint}>Max wait for AI to finish generating response (ms)</p>
 
-            {ALL_PROVIDERS.map((p) => (
-              <label key={p} className={styles.field}>
-                <span className={styles.label}>{PROVIDER_LABELS[p]}</span>
-                <input
-                  type="number"
-                  className={styles.input}
-                  value={settings.responseTimeoutMs[p] ?? 120000}
-                  onChange={(e) => handleResponseTimeout(p, Number(e.target.value))}
-                  min={30000} max={600000} step={10000}
-                />
-              </label>
-            ))}
+            {effective.map((e) => {
+              const p = e.id as ProviderName;
+              return (
+                <label key={p} className={styles.field}>
+                  <span className={styles.label}>{e.label}</span>
+                  <input
+                    type="number"
+                    className={styles.input}
+                    value={draft.responseTimeoutMs[p] ?? 120000}
+                    onChange={(e) => handleResponseTimeout(p, Number(e.target.value))}
+                    onBlur={commit}
+                    min={30000} max={600000} step={10000}
+                  />
+                </label>
+              );
+            })}
           </div>
         </div>
       </div>
